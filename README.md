@@ -1,6 +1,8 @@
 # Skill Factory
 
-企业知识到 AI Skill 的编译系统（MVP）。
+Skill Factory 是一套面向企业 AI Agent 场景的 Skill 构建平台，定位为“AI Agent 时代的知识编译器”。
+
+它通过聊天交互、文档解析、图片理解与 AI 自动追问，将企业中的 SOP、FAQ、流程说明和专家经验等非结构化知识，逐步转化为可执行、可测试、可导出的标准化 AI Skill。
 
 ## 架构
 - `frontend/`: React + Vite 聊天式 Skill Builder UI
