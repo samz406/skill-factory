@@ -30,6 +30,7 @@ export function App() {
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
   const [exportMsg, setExportMsg] = useState('')
   const [score, setScore] = useState(0)
+  const [showSettings, setShowSettings] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamController = useRef<AbortController | null>(null)
@@ -182,26 +183,6 @@ export function App() {
           {llmConfigured === null ? '⏳ 检测中...' : llmConfigured ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
         </div>
 
-        {/* Model Selection */}
-        <div className="section">
-          <div className="section-title">模型配置</div>
-          <select value={provider} onChange={e => onProviderChange(e.target.value)} className="select">
-            {PROVIDERS.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-          <select
-            value={model}
-            onChange={e => setModel(e.target.value)}
-            className="select"
-            style={{ marginTop: 6 }}
-          >
-            {(PROVIDERS.find(p => p.value === provider)?.models || []).map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-        </div>
-
         {/* Conversation */}
         <div className="section">
           <div className="section-title">当前会话</div>
@@ -260,9 +241,14 @@ export function App() {
       <main className="chat">
         <div className="chat-header">
           <span>Chat Builder</span>
-          {missing.length > 0 && (
-            <span className="missing-hint">待填写：{missing.join(' · ')}</span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {missing.length > 0 && (
+              <span className="missing-hint">待填写：{missing.join(' · ')}</span>
+            )}
+            <button className="settings-btn" onClick={() => setShowSettings(true)} title="设置">
+              ⚙️
+            </button>
+          </div>
         </div>
         <div className="messages">
           {messages.map((m, i) => (
@@ -353,6 +339,71 @@ export function App() {
           </div>
         )}
       </aside>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal-panel glass" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>⚙️ 设置</span>
+              <button className="modal-close" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+
+            <div className="modal-body">
+              <div className="settings-section">
+                <div className="settings-section-title">🤖 大模型配置</div>
+                <div className="settings-row">
+                  <label className="settings-label">提供商</label>
+                  <select value={provider} onChange={e => onProviderChange(e.target.value)} className="select settings-select">
+                    {PROVIDERS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-label">模型</label>
+                  <select value={model} onChange={e => setModel(e.target.value)} className="select settings-select">
+                    {(PROVIDERS.find(p => p.value === provider)?.models || []).map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-label">状态</label>
+                  <span className={`status-badge settings-status ${llmConfigured ? 'status-ok' : 'status-warn'}`}>
+                    {llmConfigured === null ? '⏳ 检测中...' : llmConfigured ? '🟢 已就绪' : '🟡 未配置'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">💬 会话信息</div>
+                <div className="settings-row">
+                  <label className="settings-label">会话 ID</label>
+                  <span className="conv-id">{cid ? cid : '未创建'}</span>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-label">完成度</label>
+                  <span style={{ color: '#6d8bff', fontWeight: 600 }}>{score}%</span>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">📝 Skill 操作</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button className="btn btn-primary" onClick={() => { runRender(); setShowSettings(false) }} disabled={!spec?.name && !spec?.description}>
+                    📝 渲染 SKILL.md
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => { runExport(); setShowSettings(false) }} disabled={!cid}>
+                    ⬇️ 导出文件
+                  </button>
+                </div>
+                {exportMsg && <div className="export-msg" style={{ marginTop: 6 }}>{exportMsg}</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
