@@ -1,0 +1,7 @@
+:root{font-family:Inter,system-ui;background:#0b1020;color:#eaf0ff}
+body{margin:0}.app{display:grid;grid-template-columns:260px 1fr 320px;height:100vh;gap:16px;padding:16px;background:radial-gradient(circle at top,#15213f,#090d1a)}
+.glass{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);backdrop-filter: blur(12px);border-radius:18px;padding:16px}
+.chat{display:flex;flex-direction:column}.messages{flex:1;overflow:auto;padding:8px 4px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:75%;padding:12px 14px;border-radius:14px;line-height:1.5;white-space:pre-wrap}.msg.user{align-self:flex-end;background:#4169e1}.msg.assistant{align-self:flex-start;background:#1a2749}
+.composer{display:flex;gap:12px}.composer textarea{flex:1;min-height:70px;background:#0e1733;color:#fff;border:1px solid #32467a;border-radius:12px;padding:10px}.composer button,.panel button{background:#6d8bff;color:white;border:none;border-radius:12px;padding:10px 14px}
+.hint,.result{font-size:12px;opacity:.9;margin:8px 0}.panel pre{max-height:280px;overflow:auto;background:#0e1733;padding:10px;border-radius:10px}
