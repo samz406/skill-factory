@@ -10,6 +10,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     message: str
+    provider: Optional[str] = None   # e.g. "openai", "deepseek", "qwen", "kimi"
+    model: Optional[str] = None      # override model name
 
 
 class SkillSpec(BaseModel):

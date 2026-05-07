@@ -1,60 +1,358 @@
-import { useState } from 'react'
-import { chat, upload, testSpec } from './api'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getModels, getHealth } from './api'
 
-type Msg = { role: 'user'|'assistant'; content: string }
+type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
+type Tab = 'spec' | 'skill_md' | 'test'
 
-export function App(){
-  const [messages, setMessages] = useState<Msg[]>([{role:'assistant', content:'你好，我是 Skill Factory。请描述你的业务目标，我会持续追问并生成 SkillSpec。'}])
+const PROVIDERS = [
+  { value: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'] },
+  { value: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { value: 'qwen', label: 'Qwen (通义)', models: ['qwen-plus', 'qwen-turbo', 'qwen-max'] },
+  { value: 'kimi', label: 'Kimi (月之暗面)', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
+]
+
+export function App() {
+  const [messages, setMessages] = useState<Msg[]>([
+    { role: 'assistant', content: '你好，我是 Skill Factory 🏭\n\n请描述你的业务目标和场景，我会通过对话帮你逐步构建 AI Skill。\n\n你可以告诉我：\n- 这个 Skill 要解决什么业务问题？\n- 有哪些操作流程或规则？\n- 需要调用哪些系统或 API？' },
+  ])
   const [text, setText] = useState('')
   const [cid, setCid] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [spec, setSpec] = useState<any>({})
   const [missing, setMissing] = useState<string[]>([])
+  const [tab, setTab] = useState<Tab>('spec')
+  const [skillMd, setSkillMd] = useState('')
+  const [testQuery, setTestQuery] = useState('请模拟处理一个典型业务场景')
   const [testResult, setTestResult] = useState<any>(null)
+  const [testLoading, setTestLoading] = useState(false)
+  const [provider, setProvider] = useState(PROVIDERS[0].value)
+  const [model, setModel] = useState(PROVIDERS[0].models[0])
+  const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
+  const [exportMsg, setExportMsg] = useState('')
+  const [score, setScore] = useState(0)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const streamController = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    getHealth().then(d => setLlmConfigured(d.llm_configured)).catch(() => setLlmConfigured(false))
+  }, [])
+
+  useEffect(() => {
+    if (messagesEndRef.current?.scrollIntoView) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
+
+  const calcScore = useCallback((s: any) => {
+    const slots = ['workflow', 'rules', 'tools', 'constraints', 'output_format']
+    const filled = slots.filter(k => s[k] && (Array.isArray(s[k]) ? s[k].length > 0 : s[k]))
+    return Math.round((filled.length / slots.length) * 100)
+  }, [])
 
   const send = async () => {
-    if(!text.trim()) return
-    const user = {role:'user' as const, content:text}
-    setMessages(prev=>[...prev,user]); setLoading(true)
-    const data = await chat(cid, text)
-    setCid(data.conversation_id)
-    setSpec(data.spec)
-    setMissing(data.missing_slots || [])
-    setMessages(prev=>[...prev,{role:'assistant', content:data.reply + (data.need_confirmation ? '\n\n✅ 是否确认完成当前 Skill 草稿？' : '')}])
-    setText(''); setLoading(false)
+    if (!text.trim() || loading) return
+    const userMsg = text.trim()
+    setText('')
+    setMessages(prev => [...prev, { role: 'user', content: userMsg }])
+    setLoading(true)
+
+    // Add streaming placeholder
+    setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true }])
+
+    let initDone = false
+    streamController.current = chatStream(
+      cid,
+      userMsg,
+      provider,
+      model,
+      (token) => {
+        setMessages(prev => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (last?.streaming) next[next.length - 1] = { ...last, content: last.content + token }
+          return next
+        })
+      },
+      (data) => {
+        setMessages(prev => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (last?.streaming) {
+            let content = last.content
+            if (data.need_confirmation) content += '\n\n✅ 所有槽位已完整，可以进行测试并导出 SKILL.md。'
+            next[next.length - 1] = { role: 'assistant', content }
+          }
+          return next
+        })
+        setSpec(data.spec)
+        setMissing(data.missing_slots || [])
+        setScore(calcScore(data.spec))
+        setLoading(false)
+      },
+      (convId) => {
+        if (!initDone) { setCid(convId); initDone = true }
+      },
+    )
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      send()
+    }
   }
 
   const onUpload = async (f?: File) => {
-    if(!f || !cid) return
-    const data = await upload(cid, f)
+    if (!f) return
+    let convId = cid
+    if (!convId) {
+      // Create a conversation first by sending a placeholder message
+      const data = await chat(null, '开始上传文档', provider, model)
+      convId = data.conversation_id
+      setCid(convId)
+      setSpec(data.spec)
+    }
+    if (!convId) return
+    setMessages(prev => [...prev, { role: 'assistant', content: `正在解析附件：${f.name}...` }])
+    const data = await upload(convId, f)
     setSpec(data.spec)
-    setMessages(prev=>[...prev,{role:'assistant', content:`已上传并解析：${f.name}`}])
+    setScore(calcScore(data.spec))
+    setMessages(prev => {
+      const next = [...prev]
+      next[next.length - 1] = {
+        role: 'assistant',
+        content: `✅ 已解析附件：**${f.name}**\n\n` +
+          (data.parsed?.rules?.length ? `提取规则：${data.parsed.rules.slice(0, 2).join('；')}\n` : '') +
+          (data.parsed?.workflow?.length ? `提取流程：${data.parsed.workflow.slice(0, 2).join('；')}` : ''),
+      }
+      return next
+    })
+  }
+
+  const runRender = async () => {
+    if (!spec || Object.keys(spec).length === 0) return
+    const data = await renderSkill(spec)
+    setSkillMd(data.skill_md || '')
+    setTab('skill_md')
   }
 
   const runTest = async () => {
-    const data = await testSpec(spec, '请模拟处理一个客户投诉流程')
+    if (!testQuery.trim()) return
+    setTestLoading(true)
+    const data = await testSpec(spec, testQuery)
     setTestResult(data)
+    setTestLoading(false)
+    setTab('test')
   }
 
-  return <div className='app'>
-    <aside className='panel glass'>
-      <h2>Skill Factory</h2><p>Chat-first Skill Builder</p>
-      <div className='hint'>会话ID：{cid || '未创建'}</div>
-      <input type='file' onChange={e=>onUpload(e.target.files?.[0])} />
-    </aside>
-    <main className='chat'>
-      <div className='messages'>{messages.map((m,i)=><div key={i} className={`msg ${m.role}`}>{m.content}</div>)}</div>
-      <div className='composer glass'>
-        <textarea value={text} onChange={e=>setText(e.target.value)} placeholder='输入需求、规则、工具、约束...' />
-        <button onClick={send} disabled={loading}>{loading?'生成中...':'发送'}</button>
-      </div>
-    </main>
-    <aside className='panel glass'>
-      <h3>SkillSpec 工作台</h3>
-      <p>缺失槽位：{missing.length?missing.join(', '):'无'}</p>
-      <button onClick={runTest}>运行测试</button>
-      {testResult && <div className='result'>Score: {testResult.score}<br/>{(testResult.checks||[]).join(' | ')}</div>}
-      <pre>{JSON.stringify(spec, null, 2)}</pre>
-    </aside>
-  </div>
+  const runExport = async () => {
+    if (!cid) return
+    const data = await exportSkill(cid)
+    if (data.ok) {
+      setSkillMd(data.content || '')
+      setExportMsg(`✅ 已导出到：${data.file}（评分：${data.score}分）`)
+      setTab('skill_md')
+    }
+  }
+
+  const onProviderChange = (p: string) => {
+    setProvider(p)
+    const cfg = PROVIDERS.find(x => x.value === p)
+    if (cfg) setModel(cfg.models[0])
+  }
+
+  const specSlots = [
+    { key: 'workflow', label: '流程', icon: '🔄' },
+    { key: 'rules', label: '规则', icon: '📋' },
+    { key: 'tools', label: '工具', icon: '🔧' },
+    { key: 'constraints', label: '约束', icon: '🔒' },
+    { key: 'output_format', label: '输出格式', icon: '📄' },
+  ]
+
+  return (
+    <div className="app">
+      {/* Left sidebar */}
+      <aside className="panel glass left-panel">
+        <div className="logo">🏭 Skill Factory</div>
+        <p className="tagline">AI Agent 知识编译器</p>
+
+        {/* LLM Status */}
+        <div className={`status-badge ${llmConfigured ? 'status-ok' : 'status-warn'}`}>
+          {llmConfigured === null ? '⏳ 检测中...' : llmConfigured ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
+        </div>
+
+        {/* Model Selection */}
+        <div className="section">
+          <div className="section-title">模型配置</div>
+          <select value={provider} onChange={e => onProviderChange(e.target.value)} className="select">
+            {PROVIDERS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+          <select
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            className="select"
+            style={{ marginTop: 6 }}
+          >
+            {(PROVIDERS.find(p => p.value === provider)?.models || []).map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Conversation */}
+        <div className="section">
+          <div className="section-title">当前会话</div>
+          <div className="conv-id">{cid ? `${cid.slice(0, 8)}...` : '未创建'}</div>
+        </div>
+
+        {/* File Upload */}
+        <div className="section">
+          <div className="section-title">文档上传</div>
+          <div className="upload-area" onClick={() => fileInputRef.current?.click()}>
+            📎 点击上传文件
+            <br />
+            <small>PDF / Word / TXT / MD</small>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.doc,.txt,.md,.csv"
+            style={{ display: 'none' }}
+            onChange={e => onUpload(e.target.files?.[0])}
+          />
+        </div>
+
+        {/* Progress */}
+        <div className="section">
+          <div className="section-title">完成度 {score}%</div>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${score}%` }} />
+          </div>
+          <div className="slot-list">
+            {specSlots.map(s => {
+              const val = spec[s.key]
+              const filled = Array.isArray(val) ? val.length > 0 : Boolean(val)
+              return (
+                <div key={s.key} className={`slot-item ${filled ? 'slot-ok' : 'slot-miss'}`}>
+                  {s.icon} {s.label} {filled ? '✓' : '✗'}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="section">
+          <button className="btn btn-primary" onClick={runRender} disabled={!spec?.name && !spec?.description}>
+            📝 渲染 SKILL.md
+          </button>
+          <button className="btn btn-secondary" onClick={runExport} disabled={!cid} style={{ marginTop: 8 }}>
+            ⬇️ 导出文件
+          </button>
+          {exportMsg && <div className="export-msg">{exportMsg}</div>}
+        </div>
+      </aside>
+
+      {/* Center: Chat */}
+      <main className="chat">
+        <div className="chat-header">
+          <span>Chat Builder</span>
+          {missing.length > 0 && (
+            <span className="missing-hint">待填写：{missing.join(' · ')}</span>
+          )}
+        </div>
+        <div className="messages">
+          {messages.map((m, i) => (
+            <div key={i} className={`msg ${m.role}`}>
+              <div className="msg-content">
+                {m.content || (m.streaming ? <span className="typing-dot">●</span> : '')}
+              </div>
+            </div>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
+        <div className="composer glass">
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="描述业务需求、规则、流程、约束...（Enter 发送，Shift+Enter 换行）"
+            disabled={loading}
+          />
+          <button onClick={send} disabled={loading || !text.trim()} className="btn btn-send">
+            {loading ? '⏳' : '发送'}
+          </button>
+        </div>
+      </main>
+
+      {/* Right sidebar: workspace */}
+      <aside className="panel glass right-panel">
+        <div className="tab-bar">
+          <button className={`tab ${tab === 'spec' ? 'tab-active' : ''}`} onClick={() => setTab('spec')}>
+            SkillSpec
+          </button>
+          <button className={`tab ${tab === 'skill_md' ? 'tab-active' : ''}`} onClick={() => setTab('skill_md')}>
+            SKILL.md
+          </button>
+          <button className={`tab ${tab === 'test' ? 'tab-active' : ''}`} onClick={() => setTab('test')}>
+            测试
+          </button>
+        </div>
+
+        {tab === 'spec' && (
+          <div className="tab-content">
+            <pre className="spec-preview">{JSON.stringify(spec, null, 2)}</pre>
+          </div>
+        )}
+
+        {tab === 'skill_md' && (
+          <div className="tab-content">
+            {skillMd ? (
+              <pre className="md-preview">{skillMd}</pre>
+            ) : (
+              <div className="empty-hint">点击左侧"渲染 SKILL.md"生成预览</div>
+            )}
+          </div>
+        )}
+
+        {tab === 'test' && (
+          <div className="tab-content">
+            <div className="section-title">测试查询</div>
+            <textarea
+              value={testQuery}
+              onChange={e => setTestQuery(e.target.value)}
+              className="test-input"
+              rows={3}
+            />
+            <button className="btn btn-primary" onClick={runTest} disabled={testLoading}>
+              {testLoading ? '执行中...' : '▶ 运行测试'}
+            </button>
+            {testResult && (
+              <div className="test-result">
+                <div className="test-score">评分：{testResult.score} 分</div>
+                <div className="test-checks">
+                  {(testResult.checks || []).map((c: string, i: number) => (
+                    <div key={i} className={`check-item ${c.includes('ok') ? 'check-ok' : 'check-fail'}`}>
+                      {c.includes('ok') ? '✅' : '❌'} {c}
+                    </div>
+                  ))}
+                </div>
+                <div className="section-title" style={{ marginTop: 12 }}>模拟输出</div>
+                <div className="test-answer">{testResult.answer}</div>
+                {testResult.tool_calls?.length > 0 && (
+                  <>
+                    <div className="section-title" style={{ marginTop: 8 }}>Tool Calls</div>
+                    <pre className="spec-preview">{JSON.stringify(testResult.tool_calls, null, 2)}</pre>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </aside>
+    </div>
+  )
 }

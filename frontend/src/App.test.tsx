@@ -6,6 +6,6 @@ import { describe, it, expect } from 'vitest'
 describe('App', ()=>{
   it('renders greeting', ()=>{
     render(<App />)
-    expect(screen.getByText(/Skill Factory/)).toBeTruthy()
+    expect(screen.getAllByText(/Skill Factory/).length).toBeGreaterThan(0)
   })
 })
