@@ -1,11 +1,11 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from .models import ChatRequest, ChatMessage, TestRequest, TestResponse, SkillSpec
 from .store import store
-from .engine import build_reply, infer_spec_delta, render_skill_md
+from .engine import build_reply, infer_spec_delta, render_skill_md, parse_attachment, score_spec, missing_slots
 
-app = FastAPI(title="Skill Factory API", version="0.1.0")
+app = FastAPI(title="Skill Factory API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,30 +29,37 @@ def chat(req: ChatRequest):
     reply = build_reply(req.message, draft.spec)
     draft.messages.append(ChatMessage(role="assistant", content=reply))
     store.save(draft)
+    miss = missing_slots(draft.spec)
     return {
         "conversation_id": draft.conversation_id,
         "reply": reply,
         "spec": draft.spec.model_dump(),
-        "need_confirmation": "确认" in req.message or "完成" in req.message,
+        "missing_slots": miss,
+        "need_confirmation": ("确认" in req.message or "完成" in req.message) and not miss,
     }
 
 
 @app.post("/upload/{conversation_id}")
 async def upload(conversation_id: str, file: UploadFile = File(...)):
     draft = store.get(conversation_id)
+    if not draft.conversation_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+
     target = store.attachments / f"{conversation_id}_{file.filename}"
     data = await file.read()
     target.write_bytes(data)
+    parsed = parse_attachment(str(target))
     draft.attachments.append(str(target))
-    draft.messages.append(ChatMessage(role="assistant", content=f"已解析附件：{file.filename}（本地存储）"))
+    draft.spec = infer_spec_delta("附件已上传", draft.spec, parsed)
+    draft.messages.append(ChatMessage(role="assistant", content=f"已解析附件：{file.filename}\n提取预览：{parsed.get('raw_preview','')[:200]}"))
     store.save(draft)
-    return {"ok": True, "path": str(target)}
+    return {"ok": True, "path": str(target), "parsed": parsed, "spec": draft.spec.model_dump()}
 
 
 @app.get("/draft/{conversation_id}")
 def get_draft(conversation_id: str):
     draft = store.get(conversation_id)
-    return draft.model_dump()
+    return {**draft.model_dump(), "missing_slots": missing_slots(draft.spec), "score": score_spec(draft.spec)}
 
 
 @app.post("/render")
@@ -63,15 +70,16 @@ def render(spec: SkillSpec):
 @app.post("/test", response_model=TestResponse)
 def test(req: TestRequest):
     checks = [
-        "规则约束已载入" if req.skill_spec.rules else "规则为空",
-        "输出格式已定义" if req.skill_spec.output_format else "输出格式待补充",
+        "workflow ok" if req.skill_spec.workflow else "workflow missing",
+        "rules ok" if req.skill_spec.rules else "rules missing",
+        "tools ok" if req.skill_spec.tools else "tools missing",
+        "output_format ok" if req.skill_spec.output_format else "output_format missing",
     ]
-    score = 80 + (10 if req.skill_spec.rules else 0) + (10 if req.skill_spec.output_format else 0)
     return TestResponse(
-        answer=f"模拟执行：已根据问题《{req.query}》返回建议结果。",
+        answer=f"模拟执行完成：针对“{req.query}”输出建议结果。",
         checks=checks,
-        score=min(score, 100),
-        tool_calls=[]
+        score=score_spec(req.skill_spec),
+        tool_calls=[{"name": req.skill_spec.tools[0], "status": "simulated"}] if req.skill_spec.tools else []
     )
 
 
@@ -83,4 +91,4 @@ def export(conversation_id: str):
     export_dir.mkdir(parents=True, exist_ok=True)
     target = export_dir / f"{conversation_id}.md"
     target.write_text(content, encoding="utf-8")
-    return {"ok": True, "file": str(target)}
+    return {"ok": True, "file": str(target), "score": score_spec(draft.spec)}
