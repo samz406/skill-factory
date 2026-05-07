@@ -1,0 +1,28 @@
+{
+  "conversation_id": "dbd16eaf-88d0-40e1-97ba-5a90cc738f98",
+  "messages": [
+    {
+      "role": "user",
+      "content": "test"
+    },
+    {
+      "role": "assistant",
+      "content": "我已更新草稿。\n下一步：请补充端到端流程步骤（触发条件→处理动作→结束条件）。"
+    }
+  ],
+  "spec": {
+    "name": "",
+    "description": "test",
+    "role": "",
+    "workflow": [],
+    "rules": [],
+    "tools": [],
+    "constraints": [
+      "敏感信息必须脱敏",
+      "高风险操作必须二次确认"
+    ],
+    "exceptions": [],
+    "output_format": ""
+  },
+  "attachments": []
+}

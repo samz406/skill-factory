@@ -1,0 +1,32 @@
+{
+  "conversation_id": "db8846cc-7a0f-4710-9479-22dab950f252",
+  "messages": [
+    {
+      "role": "user",
+      "content": "我们有客服SOP流程和输出规则"
+    },
+    {
+      "role": "assistant",
+      "content": "我已更新草稿。\n下一步：请补充需要调用的系统/API与鉴权方式。"
+    }
+  ],
+  "spec": {
+    "name": "",
+    "description": "我们有客服SOP流程和输出规则",
+    "role": "",
+    "workflow": [
+      "梳理输入条件并执行标准化流程"
+    ],
+    "rules": [
+      "执行过程中严格遵循业务规则，冲突时中止并请求确认"
+    ],
+    "tools": [],
+    "constraints": [
+      "敏感信息必须脱敏",
+      "高风险操作必须二次确认"
+    ],
+    "exceptions": [],
+    "output_format": "Markdown说明 + JSON结构化结果"
+  },
+  "attachments": []
+}

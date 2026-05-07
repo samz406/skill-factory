@@ -17,8 +17,13 @@ def parse_attachment(path: str) -> Dict[str, List[str] | str]:
     p = Path(path)
     suffix = p.suffix.lower()
     content = ""
+
     if suffix in {".txt", ".md", ".csv", ".json", ".py", ".log"}:
         content = p.read_text(encoding="utf-8", errors="ignore")[:15000]
+    elif suffix == ".pdf":
+        content = _parse_pdf(p)
+    elif suffix in {".docx", ".doc"}:
+        content = _parse_docx(p)
     else:
         content = f"[binary:{suffix}]"
 
@@ -36,7 +41,34 @@ def parse_attachment(path: str) -> Dict[str, List[str] | str]:
     }
 
 
+def _parse_pdf(path: Path) -> str:
+    try:
+        import pdfplumber
+        text_parts = []
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:20]:  # limit to 20 pages
+                text = page.extract_text() or ""
+                text_parts.append(text)
+        return "\n".join(text_parts)[:15000]
+    except ImportError:
+        return "[PDF parsing requires pdfplumber]"
+    except Exception as e:
+        return f"[PDF parse error: {e}]"
+
+
+def _parse_docx(path: Path) -> str:
+    try:
+        from docx import Document
+        doc = Document(str(path))
+        return "\n".join(p.text for p in doc.paragraphs)[:15000]
+    except ImportError:
+        return "[DOCX parsing requires python-docx]"
+    except Exception as e:
+        return f"[DOCX parse error: {e}]"
+
+
 def infer_spec_delta(message: str, spec: SkillSpec, parsed: dict | None = None) -> SkillSpec:
+    """Rule-based spec inference (used as fallback when LLM is not configured)."""
     new = spec.model_copy(deep=True)
     text = message.strip()
     if text and not new.description:
@@ -81,6 +113,7 @@ def missing_slots(spec: SkillSpec) -> list[str]:
 
 
 def build_reply(message: str, spec: SkillSpec) -> str:
+    """Rule-based reply builder (used as fallback when LLM is not configured)."""
     miss = missing_slots(spec)
     if "确认" in message or "完成" in message:
         if not miss:
