@@ -5,11 +5,12 @@ export async function chat(
   message: string,
   provider?: string,
   model?: string,
+  api_key?: string,
 ) {
   const res = await fetch(`${API}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversation_id, message, provider, model }),
+    body: JSON.stringify({ conversation_id, message, provider, model, api_key }),
   })
   return res.json()
 }
@@ -22,12 +23,13 @@ export function chatStream(
   onToken?: (token: string) => void,
   onDone?: (data: { spec: any; missing_slots: string[]; need_confirmation: boolean }) => void,
   onInit?: (conversation_id: string) => void,
+  api_key?: string,
 ): AbortController {
   const controller = new AbortController()
   fetch(`${API}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversation_id, message, provider, model }),
+    body: JSON.stringify({ conversation_id, message, provider, model, api_key }),
     signal: controller.signal,
   }).then(async (res) => {
     const reader = res.body?.getReader()
