@@ -27,6 +27,7 @@ export function App() {
   const [testLoading, setTestLoading] = useState(false)
   const [provider, setProvider] = useState(PROVIDERS[0].value)
   const [model, setModel] = useState(PROVIDERS[0].models[0])
+  const [apiKey, setApiKey] = useState('')
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
   const [exportMsg, setExportMsg] = useState('')
   const [score, setScore] = useState(0)
@@ -94,6 +95,7 @@ export function App() {
       (convId) => {
         if (!initDone) { setCid(convId); initDone = true }
       },
+      apiKey || undefined,
     )
   }
 
@@ -109,7 +111,7 @@ export function App() {
     let convId = cid
     if (!convId) {
       // Create a conversation first by sending a placeholder message
-      const data = await chat(null, '开始上传文档', provider, model)
+      const data = await chat(null, '开始上传文档', provider, model, apiKey || undefined)
       convId = data.conversation_id
       setCid(convId)
       setSpec(data.spec)
@@ -171,6 +173,8 @@ export function App() {
     { key: 'output_format', label: '输出格式', icon: '📄' },
   ]
 
+  const isLlmReady = Boolean(llmConfigured || apiKey)
+
   return (
     <div className="app">
       {/* Left sidebar */}
@@ -179,8 +183,8 @@ export function App() {
         <p className="tagline">AI Agent 知识编译器</p>
 
         {/* LLM Status */}
-        <div className={`status-badge ${llmConfigured ? 'status-ok' : 'status-warn'}`}>
-          {llmConfigured === null ? '⏳ 检测中...' : llmConfigured ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
+        <div className={`status-badge ${isLlmReady ? 'status-ok' : 'status-warn'}`}>
+          {llmConfigured === null ? '⏳ 检测中...' : isLlmReady ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
         </div>
 
         {/* Conversation */}
@@ -369,9 +373,19 @@ export function App() {
                   </select>
                 </div>
                 <div className="settings-row">
+                  <label className="settings-label">API Key</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    placeholder="sk-..."
+                    className="settings-input"
+                  />
+                </div>
+                <div className="settings-row">
                   <label className="settings-label">状态</label>
-                  <span className={`status-badge settings-status ${llmConfigured ? 'status-ok' : 'status-warn'}`}>
-                    {llmConfigured === null ? '⏳ 检测中...' : llmConfigured ? '🟢 已就绪' : '🟡 未配置'}
+                  <span className={`status-badge settings-status ${isLlmReady ? 'status-ok' : 'status-warn'}`}>
+                    {llmConfigured === null ? '⏳ 检测中...' : isLlmReady ? '🟢 已就绪' : '🟡 未配置'}
                   </span>
                 </div>
               </div>

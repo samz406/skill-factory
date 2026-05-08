@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     message: str
     provider: Optional[str] = None   # e.g. "openai", "deepseek", "qwen", "kimi"
     model: Optional[str] = None      # override model name
+    api_key: Optional[str] = None    # user-provided API key (overrides env var)
 
 
 class SkillSpec(BaseModel):

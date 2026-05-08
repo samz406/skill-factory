@@ -421,6 +421,21 @@ body { margin: 0; }
   flex: 1;
 }
 
+.settings-input {
+  flex: 1;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: #e0e8ff;
+  padding: 5px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.settings-input:focus {
+  border-color: #6d8bff;
+}
+
 .settings-status {
   flex: 1;
   text-align: left;
