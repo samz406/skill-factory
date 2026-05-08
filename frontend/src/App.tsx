@@ -173,6 +173,8 @@ export function App() {
     { key: 'output_format', label: '输出格式', icon: '📄' },
   ]
 
+  const isLlmReady = Boolean(llmConfigured || apiKey)
+
   return (
     <div className="app">
       {/* Left sidebar */}
@@ -181,8 +183,8 @@ export function App() {
         <p className="tagline">AI Agent 知识编译器</p>
 
         {/* LLM Status */}
-        <div className={`status-badge ${(llmConfigured || apiKey) ? 'status-ok' : 'status-warn'}`}>
-          {llmConfigured === null ? '⏳ 检测中...' : (llmConfigured || apiKey) ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
+        <div className={`status-badge ${isLlmReady ? 'status-ok' : 'status-warn'}`}>
+          {llmConfigured === null ? '⏳ 检测中...' : isLlmReady ? '🟢 LLM 已就绪' : '🟡 LLM 未配置（规则模式）'}
         </div>
 
         {/* Conversation */}
@@ -378,15 +380,12 @@ export function App() {
                     onChange={e => setApiKey(e.target.value)}
                     placeholder="sk-..."
                     className="settings-input"
-                    onBlur={() => {
-                      if (apiKey) setLlmConfigured(true)
-                    }}
                   />
                 </div>
                 <div className="settings-row">
                   <label className="settings-label">状态</label>
-                  <span className={`status-badge settings-status ${(llmConfigured || apiKey) ? 'status-ok' : 'status-warn'}`}>
-                    {llmConfigured === null ? '⏳ 检测中...' : (llmConfigured || apiKey) ? '🟢 已就绪' : '🟡 未配置'}
+                  <span className={`status-badge settings-status ${isLlmReady ? 'status-ok' : 'status-warn'}`}>
+                    {llmConfigured === null ? '⏳ 检测中...' : isLlmReady ? '🟢 已就绪' : '🟡 未配置'}
                   </span>
                 </div>
               </div>

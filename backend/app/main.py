@@ -191,13 +191,14 @@ def export(conversation_id: str):
 
 def _apply_request_overrides(req: ChatRequest) -> None:
     """Override global LLM settings for this request if provider/model/api_key specified."""
-    if req.provider:
-        settings.llm_provider = req.provider
-        cfg = PROVIDER_CONFIGS.get(req.provider, {})
-        api_key = os.getenv(cfg.get("env_key", ""), "")
-        if api_key:
-            settings.llm_api_key = api_key
     if req.api_key:
         settings.llm_api_key = req.api_key
+    if req.provider:
+        settings.llm_provider = req.provider
+        if not req.api_key:
+            cfg = PROVIDER_CONFIGS.get(req.provider, {})
+            api_key = os.getenv(cfg.get("env_key", ""), "")
+            if api_key:
+                settings.llm_api_key = api_key
     if req.model:
         settings.llm_model = req.model
