@@ -1,14 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getModels, getHealth } from './api'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getModels, getHealth, getLLMSettings, saveLLMSettings } from './api'
 
 type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
 type Tab = 'spec' | 'skill_md' | 'test'
 
 const PROVIDERS = [
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'] },
-  { value: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { value: 'qwen', label: 'Qwen (通义)', models: ['qwen-plus', 'qwen-turbo', 'qwen-max'] },
-  { value: 'kimi', label: 'Kimi (月之暗面)', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
+  { value: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'] },
+  { value: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { value: 'qwen', label: 'Qwen (通义)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-plus', 'qwen-turbo', 'qwen-max'] },
+  { value: 'kimi', label: 'Kimi (月之暗面)', baseUrl: 'https://api.moonshot.cn/v1', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
 ]
 
 export function App() {
@@ -32,12 +32,20 @@ export function App() {
   const [exportMsg, setExportMsg] = useState('')
   const [score, setScore] = useState(0)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsSaved, setSettingsSaved] = useState(false)
+  const [baseUrl, setBaseUrl] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamController = useRef<AbortController | null>(null)
 
   useEffect(() => {
     getHealth().then(d => setLlmConfigured(d.llm_configured)).catch(() => setLlmConfigured(false))
+    getLLMSettings().then(d => {
+      if (d.provider) onProviderChange(d.provider)
+      if (d.model) setModel(d.model)
+      if (d.api_key) setApiKey(d.api_key)
+      if (d.base_url) setBaseUrl(d.base_url)
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -349,7 +357,7 @@ export function App() {
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
           <div className="modal-panel glass" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span>⚙️ 设置</span>
+              <span>⚙️ 大模型配置</span>
               <button className="modal-close" onClick={() => setShowSettings(false)}>✕</button>
             </div>
 
@@ -373,6 +381,16 @@ export function App() {
                   </select>
                 </div>
                 <div className="settings-row">
+                  <label className="settings-label">API URL</label>
+                  <input
+                    type="text"
+                    value={baseUrl}
+                    onChange={e => setBaseUrl(e.target.value)}
+                    placeholder={PROVIDERS.find(p => p.value === provider)?.baseUrl || 'https://api.openai.com/v1'}
+                    className="settings-input"
+                  />
+                </div>
+                <div className="settings-row">
                   <label className="settings-label">API Key</label>
                   <input
                     type="password"
@@ -388,31 +406,20 @@ export function App() {
                     {llmConfigured === null ? '⏳ 检测中...' : isLlmReady ? '🟢 已就绪' : '🟡 未配置'}
                   </span>
                 </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-section-title">💬 会话信息</div>
-                <div className="settings-row">
-                  <label className="settings-label">会话 ID</label>
-                  <span className="conv-id">{cid ? cid : '未创建'}</span>
-                </div>
-                <div className="settings-row">
-                  <label className="settings-label">完成度</label>
-                  <span style={{ color: '#6d8bff', fontWeight: 600 }}>{score}%</span>
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-section-title">📝 Skill 操作</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button className="btn btn-primary" onClick={() => { runRender(); setShowSettings(false) }} disabled={!spec?.name && !spec?.description}>
-                    📝 渲染 SKILL.md
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => { runExport(); setShowSettings(false) }} disabled={!cid}>
-                    ⬇️ 导出文件
+                <div className="settings-row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+                  {settingsSaved && <span style={{ color: '#4caf50', marginRight: 12, fontSize: 13 }}>✅ 已保存</span>}
+                  <button
+                    className="btn btn-primary"
+                    onClick={async () => {
+                      await saveLLMSettings({ provider, model, api_key: apiKey, base_url: baseUrl })
+                      setLlmConfigured(Boolean(apiKey))
+                      setSettingsSaved(true)
+                      setTimeout(() => setSettingsSaved(false), 3000)
+                    }}
+                  >
+                    💾 保存
                   </button>
                 </div>
-                {exportMsg && <div className="export-msg" style={{ marginTop: 6 }}>{exportMsg}</div>}
               </div>
             </div>
           </div>
