@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from pathlib import Path
 from .models import ChatRequest, ChatMessage, TestRequest, TestResponse, SkillSpec
 from .store import store
@@ -15,7 +16,7 @@ from .llm import (
     llm_extract_spec,
     llm_test_skill,
 )
-from .config import settings, PROVIDER_CONFIGS, get_effective_provider_config
+from .config import settings, PROVIDER_CONFIGS, get_effective_provider_config, save_llm_config
 
 app = FastAPI(title="Skill Factory API", version="0.3.0")
 
@@ -41,6 +42,37 @@ def get_models():
         "current_provider": settings.llm_provider,
         "current_model": get_effective_provider_config()["model"],
     }
+
+
+class LLMSettingsRequest(BaseModel):
+    provider: str
+    model: str
+    api_key: str
+    base_url: str = ""
+
+
+@app.get("/settings")
+def get_settings():
+    """Return current LLM configuration."""
+    cfg = get_effective_provider_config()
+    return {
+        "provider": settings.llm_provider,
+        "model": cfg["model"],
+        "api_key": settings.llm_api_key,
+        "base_url": settings.llm_base_url,
+    }
+
+
+@app.post("/settings")
+def update_settings(req: LLMSettingsRequest):
+    """Save LLM configuration to file and apply immediately."""
+    save_llm_config(
+        provider=req.provider,
+        api_key=req.api_key,
+        model=req.model,
+        base_url=req.base_url,
+    )
+    return {"ok": True, "llm_configured": bool(req.api_key)}
 
 
 @app.post("/chat")

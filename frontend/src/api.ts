@@ -101,3 +101,22 @@ export async function getHealth() {
   const res = await fetch(`${API}/health`)
   return res.json()
 }
+
+export async function getLLMSettings() {
+  const res = await fetch(`${API}/settings`)
+  return res.json()
+}
+
+export async function saveLLMSettings(payload: {
+  provider: string
+  model: string
+  api_key: string
+  base_url: string
+}) {
+  const res = await fetch(`${API}/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return res.json()
+}
