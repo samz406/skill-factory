@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, type ConversationMeta, type AgentTarget } from './api'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, getDraft, type ConversationMeta, type AgentTarget } from './api'
 
 type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
 type Tab = 'spec' | 'skill_md' | 'test'
@@ -11,10 +11,13 @@ const PROVIDERS = [
   { value: 'kimi', label: 'Kimi (月之暗面)', baseUrl: 'https://api.moonshot.cn/v1', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
 ]
 
+const DEFAULT_GREETING: Msg = {
+  role: 'assistant',
+  content: '你好，我是 Skill Factory 🏭\n\n请描述你的业务目标和场景，我会通过对话帮你逐步构建 AI Skill。\n\n你可以告诉我：\n- 这个 Skill 要解决什么业务问题？\n- 有哪些操作流程或规则？\n- 需要调用哪些系统或 API？',
+}
+
 export function App() {
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: 'assistant', content: '你好，我是 Skill Factory 🏭\n\n请描述你的业务目标和场景，我会通过对话帮你逐步构建 AI Skill。\n\n你可以告诉我：\n- 这个 Skill 要解决什么业务问题？\n- 有哪些操作流程或规则？\n- 需要调用哪些系统或 API？' },
-  ])
+  const [messages, setMessages] = useState<Msg[]>([DEFAULT_GREETING])
   const [text, setText] = useState('')
   const [cid, setCid] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -80,9 +83,7 @@ export function App() {
 
   const startNewConversation = () => {
     setCid(null)
-    setMessages([
-      { role: 'assistant', content: '你好，我是 Skill Factory 🏭\n\n请描述你的业务目标和场景，我会通过对话帮你逐步构建 AI Skill。\n\n你可以告诉我：\n- 这个 Skill 要解决什么业务问题？\n- 有哪些操作流程或规则？\n- 需要调用哪些系统或 API？' },
-    ])
+    setMessages([DEFAULT_GREETING])
     setSpec({})
     setMissing([])
     setScore(0)
@@ -94,8 +95,7 @@ export function App() {
 
   const loadConversation = async (id: string) => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/draft/${id}`)
-      const data = await res.json()
+      const data = await getDraft(id)
       setCid(id)
       setSpec(data.spec || {})
       setScore(calcScore(data.spec || {}))

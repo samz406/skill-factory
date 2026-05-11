@@ -13,6 +13,8 @@ from uuid import uuid4
 from .config import settings
 from .models import ChatMessage, Draft, SkillSpec
 
+TITLE_MAX_LENGTH = 40
+
 
 def _db_path() -> Path:
     path = Path(settings.storage_root) / "skill_factory.db"
@@ -65,7 +67,7 @@ def _now() -> str:
 def _title_from_messages(messages: List[ChatMessage]) -> str:
     for m in messages:
         if m.role == "user":
-            return m.content[:40]
+            return m.content[:TITLE_MAX_LENGTH]
     return ""
 
 

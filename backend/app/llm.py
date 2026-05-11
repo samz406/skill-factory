@@ -169,9 +169,7 @@ async def maybe_compress(draft) -> None:
     recent_msgs = draft.messages[-COMPRESS_KEEP_RECENT:]
     summary = await llm_compress_history(old_msgs)
     if summary:
-        draft.history_summary = (
-            (draft.history_summary or "") + ("\n\n" if draft.history_summary else "") + summary
-        )
+        draft.history_summary = f"{draft.history_summary}\n\n{summary}" if draft.history_summary else summary
         draft.messages = recent_msgs
 
 

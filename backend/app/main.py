@@ -258,6 +258,33 @@ def delete_conversation(conversation_id: str):
     return {"ok": True}
 
 
+import re as _re
+
+_SAFE_NAME_RE = _re.compile(r"[^\w\-]")  # keep word chars and hyphens only
+
+
+def _sanitize_skill_name(spec_name: str, fallback: str = "skill") -> str:
+    """Return a safe file-system name containing only word characters and hyphens."""
+    raw = (spec_name or fallback).replace(" ", "_")
+    safe = _SAFE_NAME_RE.sub("", raw)
+    return safe or fallback
+
+
+def _validate_sync_path(raw: str) -> Path:
+    """Expand and resolve a user-supplied sync path, rejecting traversal attempts.
+
+    Only paths inside the user's home directory are accepted for custom_path.
+    """
+    resolved = Path(raw).expanduser().resolve()
+    home = Path.home().resolve()
+    if not str(resolved).startswith(str(home)):
+        raise HTTPException(
+            status_code=400,
+            detail="custom_path must be inside the user's home directory",
+        )
+    return resolved
+
+
 # ──────────────────────────────────────────────
 # Task 2: Direct skill file download
 # ──────────────────────────────────────────────
@@ -269,7 +296,7 @@ def download_skill(conversation_id: str):
     if not draft.conversation_id:
         raise HTTPException(status_code=404, detail="conversation not found")
     content = render_skill_md(draft.spec)
-    skill_name = (draft.spec.name or conversation_id).replace(" ", "_") or "skill"
+    skill_name = _sanitize_skill_name(draft.spec.name, conversation_id)
     filename = f"{skill_name}.md"
     return Response(
         content=content.encode("utf-8"),
@@ -350,11 +377,11 @@ def sync_skill(conversation_id: str, req: SyncRequest):
     if not target and not req.custom_path:
         raise HTTPException(status_code=400, detail=f"unknown target_id: {req.target_id}")
 
-    skill_name = (draft.spec.name or "skill").replace(" ", "_")
+    skill_name = _sanitize_skill_name(draft.spec.name)
     content = render_skill_md(draft.spec)
 
     if req.custom_path:
-        dest_dir = Path(req.custom_path).expanduser()
+        dest_dir = _validate_sync_path(req.custom_path)
     else:
         path_tpl: str = target["path_template"]  # type: ignore[index]
         dest = Path(path_tpl.replace("{skill_name}", skill_name)).expanduser()
