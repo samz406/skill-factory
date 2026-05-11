@@ -2,7 +2,7 @@ import json
 import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from pathlib import Path
 from .models import ChatRequest, ChatMessage, TestRequest, TestResponse, SkillSpec
@@ -15,6 +15,7 @@ from .llm import (
     llm_chat_stream,
     llm_extract_spec,
     llm_test_skill,
+    maybe_compress,
 )
 from .config import settings, PROVIDER_CONFIGS, get_effective_provider_config, save_llm_config
 
@@ -84,7 +85,8 @@ async def chat(req: ChatRequest):
 
     reply = ""
     if is_llm_configured():
-        reply = await llm_chat_reply(draft.messages, draft.spec)
+        await maybe_compress(draft)
+        reply = await llm_chat_reply(draft.messages, draft.spec, draft.history_summary)
         updated_spec = await llm_extract_spec(draft.messages, draft.spec)
         if updated_spec:
             draft.spec = updated_spec
@@ -123,7 +125,8 @@ async def chat_stream(req: ChatRequest):
 
         full_reply = ""
         if is_llm_configured():
-            async for token in llm_chat_stream(draft.messages, draft.spec):
+            await maybe_compress(draft)
+            async for token in llm_chat_stream(draft.messages, draft.spec, draft.history_summary):
                 full_reply += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
         else:
@@ -234,3 +237,163 @@ def _apply_request_overrides(req: ChatRequest) -> None:
                 settings.llm_api_key = api_key
     if req.model:
         settings.llm_model = req.model
+
+
+# ──────────────────────────────────────────────
+# Conversation history management
+# ──────────────────────────────────────────────
+
+@app.get("/conversations")
+def list_conversations():
+    """List all conversations ordered by last update."""
+    return {"conversations": store.list()}
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str):
+    """Delete a conversation and all its messages."""
+    deleted = store.delete(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"ok": True}
+
+
+import re as _re
+
+_SAFE_NAME_RE = _re.compile(r"[^\w\-]")  # keep word chars and hyphens only
+
+
+def _sanitize_skill_name(spec_name: str, fallback: str = "skill") -> str:
+    """Return a safe file-system name containing only word characters and hyphens."""
+    raw = (spec_name or fallback).replace(" ", "_")
+    safe = _SAFE_NAME_RE.sub("", raw)
+    return safe or fallback
+
+
+def _validate_sync_path(raw: str) -> Path:
+    """Expand and resolve a user-supplied sync path, rejecting traversal attempts.
+
+    Only paths inside the user's home directory are accepted for custom_path.
+    """
+    resolved = Path(raw).expanduser().resolve()
+    home = Path.home().resolve()
+    if not str(resolved).startswith(str(home)):
+        raise HTTPException(
+            status_code=400,
+            detail="custom_path must be inside the user's home directory",
+        )
+    return resolved
+
+
+# ──────────────────────────────────────────────
+# Task 2: Direct skill file download
+# ──────────────────────────────────────────────
+
+@app.get("/download/{conversation_id}")
+def download_skill(conversation_id: str):
+    """Return the rendered SKILL.md as a downloadable file attachment."""
+    draft = store.get(conversation_id)
+    if not draft.conversation_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    content = render_skill_md(draft.spec)
+    skill_name = _sanitize_skill_name(draft.spec.name, conversation_id)
+    filename = f"{skill_name}.md"
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ──────────────────────────────────────────────
+# Task 3: Sync skill to agent tools
+# ──────────────────────────────────────────────
+
+AGENT_TARGETS = {
+    "claude_code": {
+        "id": "claude_code",
+        "label": "Claude Code",
+        "icon": "🤖",
+        "description": "Claude Code CLI 自定义命令 (~/.claude/commands/)",
+        "path_template": "~/.claude/commands/{skill_name}.md",
+    },
+    "cursor": {
+        "id": "cursor",
+        "label": "Cursor",
+        "icon": "🖱️",
+        "description": "Cursor IDE 规则文件 (~/.cursor/rules/)",
+        "path_template": "~/.cursor/rules/{skill_name}.md",
+    },
+    "cline": {
+        "id": "cline",
+        "label": "Cline (VS Code)",
+        "icon": "💻",
+        "description": "Cline VS Code 扩展 (~/.cline/rules/)",
+        "path_template": "~/.cline/rules/{skill_name}.md",
+    },
+    "continue": {
+        "id": "continue",
+        "label": "Continue.dev",
+        "icon": "▶️",
+        "description": "Continue.dev 编码助手 (~/.continue/skills/)",
+        "path_template": "~/.continue/skills/{skill_name}.md",
+    },
+    "open_claw": {
+        "id": "open_claw",
+        "label": "Open Claw",
+        "icon": "🦅",
+        "description": "Open Claw Agent (~/.openclaw/skills/)",
+        "path_template": "~/.openclaw/skills/{skill_name}.md",
+    },
+    "hermes": {
+        "id": "hermes",
+        "label": "Hermes",
+        "icon": "🌐",
+        "description": "Hermes Agent (~/.hermes/skills/)",
+        "path_template": "~/.hermes/skills/{skill_name}.md",
+    },
+}
+
+
+@app.get("/agent_targets")
+def get_agent_targets():
+    """Return the list of supported agent sync targets."""
+    return {"targets": list(AGENT_TARGETS.values())}
+
+
+class SyncRequest(BaseModel):
+    target_id: str
+    custom_path: str = ""  # optional override for the destination directory
+
+
+@app.post("/sync/{conversation_id}")
+def sync_skill(conversation_id: str, req: SyncRequest):
+    """Write the rendered SKILL.md into the target agent's config directory."""
+    draft = store.get(conversation_id)
+    if not draft.conversation_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+
+    target = AGENT_TARGETS.get(req.target_id)
+    if not target and not req.custom_path:
+        raise HTTPException(status_code=400, detail=f"unknown target_id: {req.target_id}")
+
+    skill_name = _sanitize_skill_name(draft.spec.name)
+    content = render_skill_md(draft.spec)
+
+    if req.custom_path:
+        dest_dir = _validate_sync_path(req.custom_path)
+    else:
+        path_tpl: str = target["path_template"]  # type: ignore[index]
+        dest = Path(path_tpl.replace("{skill_name}", skill_name)).expanduser()
+        dest_dir = dest.parent
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{skill_name}.md"
+    dest_file = dest_dir / filename
+    dest_file.write_text(content, encoding="utf-8")
+
+    return {
+        "ok": True,
+        "target": req.target_id or "custom",
+        "file": str(dest_file),
+    }

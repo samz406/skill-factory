@@ -78,6 +78,19 @@ export async function exportSkill(conversationId: string) {
   return res.json()
 }
 
+/** Trigger a browser download of the rendered SKILL.md file. */
+export async function downloadSkill(conversationId: string, skillName?: string) {
+  const res = await fetch(`${API}/download/${conversationId}`)
+  if (!res.ok) throw new Error('download failed')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = skillName ? `${skillName}.md` : 'skill.md'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export async function renderSkill(spec: any) {
   const res = await fetch(`${API}/render`, {
     method: 'POST',
@@ -117,6 +130,49 @@ export async function saveLLMSettings(payload: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  })
+  return res.json()
+}
+
+// ── Conversation history ──────────────────────
+
+export async function listConversations(): Promise<{ conversations: ConversationMeta[] }> {
+  const res = await fetch(`${API}/conversations`)
+  return res.json()
+}
+
+export interface ConversationMeta {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export async function deleteConversation(conversationId: string) {
+  const res = await fetch(`${API}/conversations/${conversationId}`, { method: 'DELETE' })
+  return res.json()
+}
+
+// ── Agent sync ───────────────────────────────
+
+export interface AgentTarget {
+  id: string
+  label: string
+  icon: string
+  description: string
+  path_template: string
+}
+
+export async function getAgentTargets(): Promise<{ targets: AgentTarget[] }> {
+  const res = await fetch(`${API}/agent_targets`)
+  return res.json()
+}
+
+export async function syncSkill(conversationId: string, target_id: string, custom_path = '') {
+  const res = await fetch(`${API}/sync/${conversationId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_id, custom_path }),
   })
   return res.json()
 }

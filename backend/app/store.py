@@ -1,32 +1,33 @@
-import json
 from pathlib import Path
-from uuid import uuid4
 from .config import settings
 from .models import Draft
+from .database import init_db, db_create, db_get, db_save, db_list, db_delete
 
 
 class DraftStore:
     def __init__(self):
         self.root = Path(settings.storage_root)
-        self.drafts = self.root / "skill_drafts"
         self.attachments = self.root / "attachments"
-        self.drafts.mkdir(parents=True, exist_ok=True)
         self.attachments.mkdir(parents=True, exist_ok=True)
+        init_db()
 
     def create(self) -> Draft:
-        draft = Draft(conversation_id=str(uuid4()))
-        self.save(draft)
-        return draft
+        return db_create()
 
     def get(self, conversation_id: str) -> Draft:
-        path = self.drafts / f"{conversation_id}.json"
-        if not path.exists():
+        draft = db_get(conversation_id)
+        if draft is None:
             return self.create()
-        return Draft.model_validate_json(path.read_text(encoding="utf-8"))
+        return draft
 
     def save(self, draft: Draft) -> None:
-        path = self.drafts / f"{draft.conversation_id}.json"
-        path.write_text(json.dumps(draft.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+        db_save(draft)
+
+    def list(self):
+        return db_list()
+
+    def delete(self, conversation_id: str) -> bool:
+        return db_delete(conversation_id)
 
 
 store = DraftStore()

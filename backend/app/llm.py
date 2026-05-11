@@ -11,6 +11,16 @@ from .models import ChatMessage, SkillSpec
 
 logger = logging.getLogger(__name__)
 
+COMPRESS_THRESHOLD = 20   # compress history when messages exceed this count
+COMPRESS_KEEP_RECENT = 8  # keep the most recent N messages uncompressed
+
+HISTORY_COMPRESS_PROMPT = """请将以下对话历史压缩为简洁的摘要（不超过300字），保留关键业务信息、用户提供的规则、流程步骤和决策。
+
+对话历史：
+{conversation}
+
+只输出摘要内容，不要任何前缀或解释。"""
+
 SYSTEM_PROMPT = """你是 Skill Factory，一个帮助企业构建 AI Agent Skill 的智能助手。
 
 你的任务是：
@@ -102,15 +112,34 @@ def _get_model() -> str:
     return cfg["model"]
 
 
-async def llm_chat_reply(
-    messages: List[ChatMessage],
-    current_spec: SkillSpec,
-) -> str:
-    """Generate a chat reply using the LLM. Returns empty string if LLM unavailable."""
+async def llm_compress_history(messages: List[ChatMessage]) -> str:
+    """Summarize a list of messages into a short text. Returns empty string if LLM unavailable."""
     client = _get_client()
     if not client:
         return ""
 
+    conversation = "\n".join(f"[{m.role}]: {m.content}" for m in messages)
+    prompt = HISTORY_COMPRESS_PROMPT.format(conversation=conversation)
+
+    try:
+        resp = await client.chat.completions.create(
+            model=_get_model(),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.3,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        logger.warning("LLM compress history error: %s", e)
+        return ""
+
+
+def _build_openai_messages(
+    messages: List[ChatMessage],
+    current_spec: SkillSpec,
+    history_summary: str | None = None,
+) -> list[dict]:
+    """Build the messages list to send to the LLM, with optional compressed history prefix."""
     miss = _missing_slots_list(current_spec)
     system_content = SYSTEM_PROMPT
     if miss:
@@ -118,9 +147,43 @@ async def llm_chat_reply(
     else:
         system_content += "\n\n所有槽位已填写完整，引导用户进行测试和导出。"
 
-    openai_messages = [{"role": "system", "content": system_content}]
+    openai_messages: list[dict] = [{"role": "system", "content": system_content}]
+
+    if history_summary:
+        openai_messages.append({
+            "role": "system",
+            "content": f"【历史对话摘要】\n{history_summary}",
+        })
+
     for m in messages:
         openai_messages.append({"role": m.role, "content": m.content})
+
+    return openai_messages
+
+
+async def maybe_compress(draft) -> None:
+    """If draft messages exceed threshold, compress older messages and update draft in-place."""
+    if len(draft.messages) <= COMPRESS_THRESHOLD:
+        return
+    old_msgs = draft.messages[:-COMPRESS_KEEP_RECENT]
+    recent_msgs = draft.messages[-COMPRESS_KEEP_RECENT:]
+    summary = await llm_compress_history(old_msgs)
+    if summary:
+        draft.history_summary = f"{draft.history_summary}\n\n{summary}" if draft.history_summary else summary
+        draft.messages = recent_msgs
+
+
+async def llm_chat_reply(
+    messages: List[ChatMessage],
+    current_spec: SkillSpec,
+    history_summary: str | None = None,
+) -> str:
+    """Generate a chat reply using the LLM. Returns empty string if LLM unavailable."""
+    client = _get_client()
+    if not client:
+        return ""
+
+    openai_messages = _build_openai_messages(messages, current_spec, history_summary)
 
     try:
         resp = await client.chat.completions.create(
@@ -138,6 +201,7 @@ async def llm_chat_reply(
 async def llm_chat_stream(
     messages: List[ChatMessage],
     current_spec: SkillSpec,
+    history_summary: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a chat reply using the LLM."""
     client = _get_client()
@@ -145,16 +209,7 @@ async def llm_chat_stream(
         yield ""
         return
 
-    miss = _missing_slots_list(current_spec)
-    system_content = SYSTEM_PROMPT
-    if miss:
-        system_content += f"\n\n当前缺失槽位：{', '.join(miss)}。请针对第一个缺失槽位进行追问。"
-    else:
-        system_content += "\n\n所有槽位已填写完整，引导用户进行测试和导出。"
-
-    openai_messages = [{"role": "system", "content": system_content}]
-    for m in messages:
-        openai_messages.append({"role": m.role, "content": m.content})
+    openai_messages = _build_openai_messages(messages, current_spec, history_summary)
 
     try:
         stream = await client.chat.completions.create(
