@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getModels, getHealth, getLLMSettings, saveLLMSettings } from './api'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, type ConversationMeta, type AgentTarget } from './api'
 
 type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
 type Tab = 'spec' | 'skill_md' | 'test'
@@ -34,9 +34,25 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [baseUrl, setBaseUrl] = useState('')
+  // Conversation history
+  const [conversations, setConversations] = useState<ConversationMeta[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  // Agent sync
+  const [showSync, setShowSync] = useState(false)
+  const [agentTargets, setAgentTargets] = useState<AgentTarget[]>([])
+  const [syncResults, setSyncResults] = useState<Record<string, string>>({})
+  const [syncLoading, setSyncLoading] = useState(false)
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamController = useRef<AbortController | null>(null)
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      const data = await listConversations()
+      setConversations(data.conversations || [])
+    } catch {}
+  }, [])
 
   useEffect(() => {
     getHealth().then(d => setLlmConfigured(d.llm_configured)).catch(() => setLlmConfigured(false))
@@ -46,6 +62,8 @@ export function App() {
       if (d.api_key) setApiKey(d.api_key)
       if (d.base_url) setBaseUrl(d.base_url)
     }).catch(() => {})
+    refreshHistory()
+    getAgentTargets().then(d => setAgentTargets(d.targets || [])).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -59,6 +77,47 @@ export function App() {
     const filled = slots.filter(k => s[k] && (Array.isArray(s[k]) ? s[k].length > 0 : s[k]))
     return Math.round((filled.length / slots.length) * 100)
   }, [])
+
+  const startNewConversation = () => {
+    setCid(null)
+    setMessages([
+      { role: 'assistant', content: '你好，我是 Skill Factory 🏭\n\n请描述你的业务目标和场景，我会通过对话帮你逐步构建 AI Skill。\n\n你可以告诉我：\n- 这个 Skill 要解决什么业务问题？\n- 有哪些操作流程或规则？\n- 需要调用哪些系统或 API？' },
+    ])
+    setSpec({})
+    setMissing([])
+    setScore(0)
+    setSkillMd('')
+    setExportMsg('')
+    setTestResult(null)
+    setShowHistory(false)
+  }
+
+  const loadConversation = async (id: string) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/draft/${id}`)
+      const data = await res.json()
+      setCid(id)
+      setSpec(data.spec || {})
+      setScore(calcScore(data.spec || {}))
+      setMissing(data.missing_slots || [])
+      const msgs: Msg[] = (data.messages || []).map((m: any) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }))
+      if (msgs.length === 0) {
+        msgs.unshift({ role: 'assistant', content: '（已加载历史对话）' })
+      }
+      setMessages(msgs)
+      setShowHistory(false)
+    } catch {}
+  }
+
+  const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    await deleteConversation(id)
+    await refreshHistory()
+    if (cid === id) startNewConversation()
+  }
 
   const send = async () => {
     if (!text.trim() || loading) return
@@ -99,6 +158,7 @@ export function App() {
         setMissing(data.missing_slots || [])
         setScore(calcScore(data.spec))
         setLoading(false)
+        refreshHistory()
       },
       (convId) => {
         if (!initDone) { setCid(convId); initDone = true }
@@ -139,6 +199,7 @@ export function App() {
       }
       return next
     })
+    refreshHistory()
   }
 
   const runRender = async () => {
@@ -165,6 +226,37 @@ export function App() {
       setExportMsg(`✅ 已导出到：${data.file}（评分：${data.score}分）`)
       setTab('skill_md')
     }
+  }
+
+  const runDownload = async () => {
+    if (!cid) return
+    try {
+      await downloadSkill(cid, spec?.name)
+    } catch {
+      setExportMsg('❌ 下载失败，请先生成 Skill')
+    }
+  }
+
+  const openSync = () => {
+    setSyncResults({})
+    setSelectedAgents(new Set(agentTargets.map(t => t.id)))
+    setShowSync(true)
+  }
+
+  const runSync = async () => {
+    if (!cid) return
+    setSyncLoading(true)
+    const results: Record<string, string> = {}
+    for (const targetId of selectedAgents) {
+      try {
+        const data = await syncSkill(cid, targetId)
+        results[targetId] = data.ok ? `✅ ${data.file}` : `❌ 失败`
+      } catch {
+        results[targetId] = '❌ 请求失败'
+      }
+    }
+    setSyncResults(results)
+    setSyncLoading(false)
   }
 
   const onProviderChange = (p: string) => {
@@ -199,6 +291,18 @@ export function App() {
         <div className="section">
           <div className="section-title">当前会话</div>
           <div className="conv-id">{cid ? `${cid.slice(0, 8)}...` : '未创建'}</div>
+          <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+            <button className="btn btn-secondary" style={{ flex: 1, fontSize: 11, padding: '5px 0' }} onClick={startNewConversation}>
+              ✨ 新对话
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: 11, padding: '5px 0' }}
+              onClick={() => { refreshHistory(); setShowHistory(true) }}
+            >
+              📋 历史
+            </button>
+          </div>
         </div>
 
         {/* File Upload */}
@@ -242,8 +346,14 @@ export function App() {
           <button className="btn btn-primary" onClick={runRender} disabled={!spec?.name && !spec?.description}>
             📝 渲染 SKILL.md
           </button>
-          <button className="btn btn-secondary" onClick={runExport} disabled={!cid} style={{ marginTop: 8 }}>
-            ⬇️ 导出文件
+          <button className="btn btn-secondary" onClick={runExport} disabled={!cid} style={{ marginTop: 6 }}>
+            💾 导出文件
+          </button>
+          <button className="btn btn-secondary" onClick={runDownload} disabled={!cid} style={{ marginTop: 6 }}>
+            📥 下载 SKILL.md
+          </button>
+          <button className="btn btn-secondary" onClick={openSync} disabled={!cid} style={{ marginTop: 6 }}>
+            🔄 同步到 Agent
           </button>
           {exportMsg && <div className="export-msg">{exportMsg}</div>}
         </div>
@@ -420,6 +530,92 @@ export function App() {
                     💾 保存
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* History Modal */}
+      {showHistory && (
+        <div className="modal-overlay" onClick={() => setShowHistory(false)}>
+          <div className="modal-panel glass" style={{ width: 480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>📋 历史对话</span>
+              <button className="modal-close" onClick={() => setShowHistory(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {conversations.length === 0 ? (
+                <div className="empty-hint">暂无历史对话</div>
+              ) : (
+                <div className="history-list">
+                  {conversations.map(c => (
+                    <div key={c.id} className="history-item" onClick={() => loadConversation(c.id)}>
+                      <div className="history-item-main">
+                        <div className="history-title">{c.title || '（未命名对话）'}</div>
+                        <div className="history-time">{new Date(c.updated_at).toLocaleString('zh-CN')}</div>
+                      </div>
+                      <button
+                        className="history-del-btn"
+                        onClick={e => handleDeleteConversation(c.id, e)}
+                        title="删除"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sync to Agent Modal */}
+      {showSync && (
+        <div className="modal-overlay" onClick={() => setShowSync(false)}>
+          <div className="modal-panel glass" style={{ width: 500 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>🔄 同步到 Agent 工具</span>
+              <button className="modal-close" onClick={() => setShowSync(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 12, color: '#8899cc', marginBottom: 12 }}>
+                选择要将 Skill 同步到的 Agent 工具，点击"同步"后将把 SKILL.md 写入对应工具的默认配置目录。
+              </div>
+              <div className="sync-target-list">
+                {agentTargets.map(t => (
+                  <label key={t.id} className="sync-target-item">
+                    <input
+                      type="checkbox"
+                      checked={selectedAgents.has(t.id)}
+                      onChange={e => {
+                        const next = new Set(selectedAgents)
+                        e.target.checked ? next.add(t.id) : next.delete(t.id)
+                        setSelectedAgents(next)
+                      }}
+                      className="sync-checkbox"
+                    />
+                    <span className="sync-target-icon">{t.icon}</span>
+                    <span className="sync-target-info">
+                      <span className="sync-target-label">{t.label}</span>
+                      <span className="sync-target-path">{t.description}</span>
+                    </span>
+                    {syncResults[t.id] && (
+                      <span className="sync-result">{syncResults[t.id]}</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: 'auto', padding: '8px 24px' }}
+                  disabled={syncLoading || selectedAgents.size === 0 || !cid}
+                  onClick={runSync}
+                >
+                  {syncLoading ? '同步中...' : `🔄 同步到 ${selectedAgents.size} 个工具`}
+                </button>
               </div>
             </div>
           </div>

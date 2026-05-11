@@ -32,6 +32,7 @@ class Draft(BaseModel):
     messages: List[ChatMessage] = Field(default_factory=list)
     spec: SkillSpec = Field(default_factory=SkillSpec)
     attachments: List[str] = Field(default_factory=list)
+    history_summary: Optional[str] = None  # compressed summary of older messages
 
 
 class TestRequest(BaseModel):
