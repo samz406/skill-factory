@@ -125,37 +125,99 @@ def build_reply(message: str, spec: SkillSpec) -> str:
 
 
 def render_skill_md(spec: SkillSpec) -> str:
-    return f"""# {spec.name or 'Skill Factory Draft'}
+    """Render a SKILL.md following the standard format with YAML frontmatter."""
+    name = spec.name or "skill-factory-draft"
+    # Build a rich description for the frontmatter (primary triggering mechanism)
+    desc_parts = [spec.description] if spec.description else ["企业 AI Agent Skill"]
+    if spec.role:
+        desc_parts.append(f"角色：{spec.role}。")
+    if spec.workflow:
+        desc_parts.append(f"包含 {len(spec.workflow)} 个执行步骤。")
+    full_description = " ".join(desc_parts)
 
-## Description
-{spec.description}
+    body_parts: List[str] = []
 
-## Role
-{spec.role or '企业知识编译助手'}
+    body_parts.append(f"# {name}\n")
 
-## Workflow
-{chr(10).join(f'- {w}' for w in spec.workflow) or '- 待补充'}
+    if spec.description:
+        body_parts.append(spec.description + "\n")
 
-## Rules
-{chr(10).join(f'- {r}' for r in spec.rules) or '- 待补充'}
+    if spec.role:
+        body_parts.append(f"## Role\n\n{spec.role}\n")
 
-## Tools
-{chr(10).join(f'- {t}' for t in spec.tools) or '- 待补充'}
+    if spec.workflow:
+        steps = "\n".join(f"{i + 1}. {w}" for i, w in enumerate(spec.workflow))
+        body_parts.append(f"## Workflow\n\n{steps}\n")
 
-## Constraints
-{chr(10).join(f'- {c}' for c in spec.constraints) or '- 待补充'}
+    if spec.rules:
+        rules = "\n".join(f"- {r}" for r in spec.rules)
+        body_parts.append(f"## Rules\n\n{rules}\n")
 
-## Exceptions
-{chr(10).join(f'- {e}' for e in spec.exceptions) or '- 待补充'}
+    if spec.tools:
+        tools = "\n".join(f"- {t}" for t in spec.tools)
+        body_parts.append(f"## Tools\n\n{tools}\n")
 
-## Output Format
-{spec.output_format or '待补充'}
-"""
+    if spec.constraints:
+        constraints = "\n".join(f"- {c}" for c in spec.constraints)
+        body_parts.append(f"## Constraints\n\n{constraints}\n")
+
+    if spec.exceptions:
+        exceptions = "\n".join(f"- {e}" for e in spec.exceptions)
+        body_parts.append(f"## Exception Handling\n\n{exceptions}\n")
+
+    if spec.output_format:
+        body_parts.append(f"## Output Format\n\n{spec.output_format}\n")
+
+    body = "\n".join(body_parts)
+
+    return f"""---
+name: {name}
+description: {full_description}
+---
+
+{body}"""
 
 
 def score_spec(spec: SkillSpec) -> int:
-    slots = [bool(spec.workflow), bool(spec.rules), bool(spec.tools), bool(spec.constraints), bool(spec.output_format)]
-    return int(sum(slots) / len(slots) * 100)
+    """Compute a weighted quality score (0-100) for the SkillSpec.
+
+    Weights reflect the importance of each dimension for a usable skill:
+    - description (20%): the primary triggering signal for the skill
+    - workflow    (25%): step-by-step process is essential for execution
+    - rules       (20%): business rules ensure correct behaviour
+    - output_format (15%): determines how results are consumed
+    - tools       (10%): external dependencies
+    - constraints  (10%): guardrails and compliance
+    """
+    score = 0
+
+    # description: base 10 pts if non-empty, +10 if >50 chars (informative)
+    if spec.description:
+        score += 10
+        if len(spec.description) > 50:
+            score += 10
+
+    # workflow: up to 25 pts based on step count
+    if spec.workflow:
+        score += min(25, 10 + len(spec.workflow) * 5)
+
+    # rules: up to 20 pts based on count
+    if spec.rules:
+        score += min(20, 5 + len(spec.rules) * 5)
+
+    # output_format: 15 pts if defined
+    if spec.output_format:
+        score += 15
+
+    # tools: up to 10 pts
+    if spec.tools:
+        score += min(10, len(spec.tools) * 5)
+
+    # constraints: up to 10 pts
+    if spec.constraints:
+        score += min(10, len(spec.constraints) * 5)
+
+    return min(100, score)
 
 
 def to_json_spec(spec: SkillSpec) -> str:

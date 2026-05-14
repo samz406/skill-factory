@@ -34,6 +34,12 @@ SYSTEM_PROMPT = """你是 Skill Factory，一个帮助企业构建 AI Agent Skil
 3. 针对缺失的槽位主动追问
 4. 引导用户完成完整的 Skill 描述
 
+生成的 SKILL.md 将遵循行业标准格式，包含：
+- YAML frontmatter（name + description，description 是触发信号，需涵盖使用场景）
+- 清晰的 Workflow 步骤（有序列表）
+- 精确的 Rules 和 Constraints
+- 明确的 Output Format
+
 回复要求：
 - 用中文回复，亲切专业
 - 每次只聚焦追问一到两个最重要的缺失信息
@@ -323,3 +329,58 @@ def _missing_slots_list(spec: SkillSpec) -> list[str]:
     if not spec.output_format:
         miss.append("output_format")
     return miss
+
+
+EVALUATE_PROMPT = """请对以下 AI Agent Skill 的质量进行全面评估。
+
+SkillSpec:
+{spec}
+
+渲染后的 SKILL.md:
+{skill_md}
+
+请从以下维度评分（每项0-100），并给出整体反馈和可操作的改进建议。
+返回严格的 JSON 格式（不要任何其他文字）：
+{{
+  "score": <整体综合评分 0-100>,
+  "dimensions": {{
+    "description_quality": <描述质量：是否清晰说明场景和触发条件 0-100>,
+    "workflow_completeness": <流程完整性：步骤是否覆盖全流程 0-100>,
+    "rules_specificity": <规则具体性：规则是否可执行、无歧义 0-100>,
+    "output_clarity": <输出清晰度：输出格式是否明确 0-100>,
+    "tool_coverage": <工具覆盖：工具依赖是否清晰定义 0-100>,
+    "constraint_rigor": <约束严格性：约束是否涵盖风险点 0-100>
+  }},
+  "feedback": "<2-3句总体评价，指出最大优点和最主要不足>",
+  "suggestions": [
+    "<具体改进建议1>",
+    "<具体改进建议2>",
+    "<具体改进建议3>"
+  ]
+}}"""
+
+
+async def llm_evaluate_skill(spec: SkillSpec, skill_md: str) -> dict:
+    """Use LLM to evaluate skill quality and return structured evaluation data."""
+    client = _get_client()
+    if not client:
+        return {}
+
+    prompt = EVALUATE_PROMPT.format(
+        spec=json.dumps(spec.model_dump(), ensure_ascii=False, indent=2),
+        skill_md=skill_md,
+    )
+
+    try:
+        resp = await client.chat.completions.create(
+            model=_get_model(),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or "{}"
+        return json.loads(raw)
+    except Exception as e:
+        logger.warning("LLM evaluate skill error: %s", e)
+        return {}

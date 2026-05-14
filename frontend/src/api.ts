@@ -176,3 +176,32 @@ export async function syncSkill(conversationId: string, target_id: string, custo
   })
   return res.json()
 }
+
+// ── Skill evaluation ─────────────────────────
+
+export interface SkillEvaluation {
+  evaluation_id: string
+  conversation_id: string
+  score: number
+  dimensions: Record<string, number>
+  feedback: string
+  suggestions: string[]
+  created_at: string
+}
+
+export async function evaluateSkill(conversationId: string): Promise<SkillEvaluation> {
+  const res = await fetch(`${API}/evaluate/${conversationId}`, { method: 'POST' })
+  if (!res.ok) throw new Error('evaluate failed')
+  return res.json()
+}
+
+export async function getEvaluation(conversationId: string): Promise<SkillEvaluation> {
+  const res = await fetch(`${API}/evaluate/${conversationId}`)
+  if (!res.ok) throw new Error('no evaluation found')
+  return res.json()
+}
+
+export async function listEvaluations(): Promise<{ evaluations: SkillEvaluation[] }> {
+  const res = await fetch(`${API}/evaluations`)
+  return res.json()
+}

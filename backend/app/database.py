@@ -11,7 +11,7 @@ from typing import Generator, List, Optional
 from uuid import uuid4
 
 from .config import settings
-from .models import ChatMessage, Draft, SkillSpec
+from .models import ChatMessage, Draft, SkillEvaluation, SkillSpec
 
 TITLE_MAX_LENGTH = 40
 
@@ -53,6 +53,18 @@ def init_db() -> None:
                 conversation_id TEXT NOT NULL,
                 role            TEXT NOT NULL,
                 content         TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                FOREIGN KEY (conversation_id)
+                    REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id              TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                score           INTEGER NOT NULL DEFAULT 0,
+                dimensions      TEXT NOT NULL DEFAULT '{}',
+                feedback        TEXT NOT NULL DEFAULT '',
+                suggestions     TEXT NOT NULL DEFAULT '[]',
                 created_at      TEXT NOT NULL,
                 FOREIGN KEY (conversation_id)
                     REFERENCES conversations(id) ON DELETE CASCADE
@@ -156,3 +168,62 @@ def db_delete(conversation_id: str) -> bool:
     with _conn() as con:
         cur = con.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
     return cur.rowcount > 0
+
+
+# ──────────────────────────────────────────────
+# Evaluation CRUD
+# ──────────────────────────────────────────────
+
+def db_save_evaluation(evaluation: SkillEvaluation) -> SkillEvaluation:
+    """Persist a SkillEvaluation and return it with generated id/created_at."""
+    if not evaluation.evaluation_id:
+        evaluation = evaluation.model_copy(update={"evaluation_id": str(uuid4())})
+    if not evaluation.created_at:
+        evaluation = evaluation.model_copy(update={"created_at": _now()})
+
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO evaluations "
+            "(id, conversation_id, score, dimensions, feedback, suggestions, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                evaluation.evaluation_id,
+                evaluation.conversation_id,
+                evaluation.score,
+                json.dumps(evaluation.dimensions, ensure_ascii=False),
+                evaluation.feedback,
+                json.dumps(evaluation.suggestions, ensure_ascii=False),
+                evaluation.created_at,
+            ),
+        )
+    return evaluation
+
+
+def db_get_evaluation(conversation_id: str) -> Optional[SkillEvaluation]:
+    """Return the most recent evaluation for a conversation, or None."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM evaluations WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return SkillEvaluation(
+        evaluation_id=row["id"],
+        conversation_id=row["conversation_id"],
+        score=row["score"],
+        dimensions=json.loads(row["dimensions"]),
+        feedback=row["feedback"],
+        suggestions=json.loads(row["suggestions"]),
+        created_at=row["created_at"],
+    )
+
+
+def db_list_evaluations() -> List[dict]:
+    """Return all evaluations ordered by most recent first."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT id, conversation_id, score, feedback, created_at "
+            "FROM evaluations ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
