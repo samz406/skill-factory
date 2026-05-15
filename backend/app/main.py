@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from pathlib import Path
-from .models import ChatRequest, ChatMessage, TestRequest, TestResponse, SkillSpec
+from .models import ChatRequest, ChatMessage, TestRequest, TestResponse, SkillSpec, SkillEvaluation
 from .store import store
 from .engine import build_reply, infer_spec_delta, render_skill_md, parse_attachment, score_spec, missing_slots
 from .llm import (
@@ -15,7 +15,13 @@ from .llm import (
     llm_chat_stream,
     llm_extract_spec,
     llm_test_skill,
+    llm_evaluate_skill,
     maybe_compress,
+)
+from .database import (
+    db_save_evaluation,
+    db_get_evaluation,
+    db_list_evaluations,
 )
 from .config import settings, PROVIDER_CONFIGS, get_effective_provider_config, save_llm_config
 
@@ -237,6 +243,76 @@ def _apply_request_overrides(req: ChatRequest) -> None:
                 settings.llm_api_key = api_key
     if req.model:
         settings.llm_model = req.model
+
+
+# ──────────────────────────────────────────────
+# Skill evaluation (quality scoring + caching)
+# ──────────────────────────────────────────────
+
+@app.post("/evaluate/{conversation_id}")
+async def evaluate_skill(conversation_id: str):
+    """Run LLM-based quality evaluation for a skill and cache the result."""
+    draft = store.get(conversation_id)
+    if not draft.conversation_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+
+    skill_md = render_skill_md(draft.spec)
+    basic_score = score_spec(draft.spec)
+
+    llm_data: dict = {}
+    if is_llm_configured():
+        llm_data = await llm_evaluate_skill(draft.spec, skill_md)
+
+    # Build evaluation from LLM data (or fall back to rule-based scoring)
+    dimensions: dict = llm_data.get("dimensions", {})
+    if not dimensions:
+        # Rule-based fallback dimensions
+        dimensions = {
+            "description_quality": min(100, len(draft.spec.description) * 2) if draft.spec.description else 0,
+            "workflow_completeness": min(100, len(draft.spec.workflow) * 20) if draft.spec.workflow else 0,
+            "rules_specificity": min(100, len(draft.spec.rules) * 25) if draft.spec.rules else 0,
+            "output_clarity": 100 if draft.spec.output_format else 0,
+            "tool_coverage": min(100, len(draft.spec.tools) * 33) if draft.spec.tools else 0,
+            "constraint_rigor": min(100, len(draft.spec.constraints) * 33) if draft.spec.constraints else 0,
+        }
+
+    overall_score = llm_data.get("score", basic_score)
+    feedback = llm_data.get("feedback", "基于规则评估完成，建议配置 LLM 获取更详细的质量分析。")
+    suggestions = llm_data.get("suggestions", [])
+    if not suggestions:
+        from .engine import missing_slots as _missing
+        miss = _missing(draft.spec)
+        if miss:
+            suggestions = [f"补充缺失槽位：{', '.join(miss)}"]
+        if not draft.spec.description or len(draft.spec.description) < 50:
+            suggestions.append("扩展 description 字段，详细描述技能适用场景和触发条件（建议50字以上）")
+        if draft.spec.workflow and len(draft.spec.workflow) < 3:
+            suggestions.append("细化 workflow 步骤，建议至少3个有序步骤以确保完整覆盖流程")
+
+    evaluation = SkillEvaluation(
+        conversation_id=conversation_id,
+        score=overall_score,
+        dimensions=dimensions,
+        feedback=feedback,
+        suggestions=suggestions,
+    )
+    saved = db_save_evaluation(evaluation)
+    return saved.model_dump()
+
+
+@app.get("/evaluate/{conversation_id}")
+def get_evaluation(conversation_id: str):
+    """Return the most recent evaluation for a conversation."""
+    evaluation = db_get_evaluation(conversation_id)
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="no evaluation found for this conversation")
+    return evaluation.model_dump()
+
+
+@app.get("/evaluations")
+def list_evaluations():
+    """Return all cached skill evaluations ordered by most recent first."""
+    return {"evaluations": db_list_evaluations()}
 
 
 # ──────────────────────────────────────────────

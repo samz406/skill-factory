@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, getDraft, type ConversationMeta, type AgentTarget } from './api'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, getDraft, evaluateSkill, type ConversationMeta, type AgentTarget, type SkillEvaluation } from './api'
 
 type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
 type Tab = 'spec' | 'skill_md' | 'test'
@@ -46,6 +46,9 @@ export function App() {
   const [syncResults, setSyncResults] = useState<Record<string, string>>({})
   const [syncLoading, setSyncLoading] = useState(false)
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set())
+  // Evaluation
+  const [evaluation, setEvaluation] = useState<SkillEvaluation | null>(null)
+  const [evalLoading, setEvalLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamController = useRef<AbortController | null>(null)
@@ -90,6 +93,7 @@ export function App() {
     setSkillMd('')
     setExportMsg('')
     setTestResult(null)
+    setEvaluation(null)
     setShowHistory(false)
   }
 
@@ -216,6 +220,18 @@ export function App() {
     setTestResult(data)
     setTestLoading(false)
     setTab('test')
+  }
+
+  const runEvaluate = async () => {
+    if (!cid) return
+    setEvalLoading(true)
+    try {
+      const data = await evaluateSkill(cid)
+      setEvaluation(data)
+    } catch {
+      setEvaluation(null)
+    }
+    setEvalLoading(false)
   }
 
   const runExport = async () => {
@@ -456,6 +472,53 @@ export function App() {
                     <pre className="spec-preview">{JSON.stringify(testResult.tool_calls, null, 2)}</pre>
                   </>
                 )}
+              </div>
+            )}
+
+            <div className="section-title" style={{ marginTop: 16 }}>质量评估</div>
+            <button className="btn btn-secondary" onClick={runEvaluate} disabled={evalLoading || !cid} style={{ width: '100%' }}>
+              {evalLoading ? '评估中...' : '🔍 运行质量评估'}
+            </button>
+            {evaluation && (
+              <div className="test-result" style={{ marginTop: 8 }}>
+                <div className="test-score">综合评分：{evaluation.score} 分</div>
+                <div className="test-checks" style={{ marginTop: 6 }}>
+                  {Object.entries(evaluation.dimensions).map(([dim, val]) => {
+                    const labels: Record<string, string> = {
+                      description_quality: '描述质量',
+                      workflow_completeness: '流程完整性',
+                      rules_specificity: '规则具体性',
+                      output_clarity: '输出清晰度',
+                      tool_coverage: '工具覆盖',
+                      constraint_rigor: '约束严格性',
+                    }
+                    const pct = val as number
+                    return (
+                      <div key={dim} className={`check-item ${pct >= 60 ? 'check-ok' : 'check-fail'}`}>
+                        {pct >= 60 ? '✅' : '⚠️'} {labels[dim] || dim}: {pct}分
+                      </div>
+                    )
+                  })}
+                </div>
+                {evaluation.feedback && (
+                  <>
+                    <div className="section-title" style={{ marginTop: 10 }}>总体评价</div>
+                    <div className="test-answer">{evaluation.feedback}</div>
+                  </>
+                )}
+                {evaluation.suggestions?.length > 0 && (
+                  <>
+                    <div className="section-title" style={{ marginTop: 10 }}>改进建议</div>
+                    <ul style={{ paddingLeft: 16, margin: 0, fontSize: 13 }}>
+                      {evaluation.suggestions.map((s, i) => (
+                        <li key={i} style={{ marginBottom: 4 }}>{s}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                <div style={{ fontSize: 11, color: '#999', marginTop: 8 }}>
+                  评估时间：{new Date(evaluation.created_at).toLocaleString()}（已缓存）
+                </div>
               </div>
             )}
           </div>

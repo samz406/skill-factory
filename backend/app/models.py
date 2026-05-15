@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Any
+from typing import List, Optional, Literal, Any, Dict
+from datetime import datetime
 
 
 class ChatMessage(BaseModel):
@@ -25,6 +26,17 @@ class SkillSpec(BaseModel):
     constraints: List[str] = Field(default_factory=list)
     exceptions: List[str] = Field(default_factory=list)
     output_format: str = ""
+
+
+class SkillEvaluation(BaseModel):
+    """Evaluation record for a generated skill, cached for feedback collection."""
+    evaluation_id: str = ""
+    conversation_id: str = ""
+    score: int = 0                          # overall 0-100
+    dimensions: Dict[str, int] = Field(default_factory=dict)  # per-dimension scores
+    feedback: str = ""                      # narrative feedback
+    suggestions: List[str] = Field(default_factory=list)  # actionable improvements
+    created_at: str = ""
 
 
 class Draft(BaseModel):
