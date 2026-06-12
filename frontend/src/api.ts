@@ -205,3 +205,18 @@ export async function listEvaluations(): Promise<{ evaluations: SkillEvaluation[
   const res = await fetch(`${API}/evaluations`)
   return res.json()
 }
+
+export interface ImproveResult {
+  ok: boolean
+  score_before: number
+  score_after: number
+  delta: number
+  spec: any
+  message: string
+}
+
+export async function improveSkill(conversationId: string): Promise<ImproveResult> {
+  const res = await fetch(`${API}/improve/${conversationId}`, { method: 'POST' })
+  if (!res.ok) throw new Error('improve failed')
+  return res.json()
+}
