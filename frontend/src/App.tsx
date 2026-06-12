@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, getDraft, evaluateSkill, type ConversationMeta, type AgentTarget, type SkillEvaluation } from './api'
+import { chat, chatStream, upload, testSpec, exportSkill, renderSkill, getHealth, getLLMSettings, saveLLMSettings, listConversations, deleteConversation, downloadSkill, getAgentTargets, syncSkill, getDraft, evaluateSkill, improveSkill, type ConversationMeta, type AgentTarget, type SkillEvaluation } from './api'
 
 type Msg = { role: 'user' | 'assistant'; content: string; streaming?: boolean }
 type Tab = 'spec' | 'skill_md' | 'test'
@@ -49,6 +49,8 @@ export function App() {
   // Evaluation
   const [evaluation, setEvaluation] = useState<SkillEvaluation | null>(null)
   const [evalLoading, setEvalLoading] = useState(false)
+  const [improveLoading, setImproveLoading] = useState(false)
+  const [improveDelta, setImproveDelta] = useState<{ before: number; after: number } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamController = useRef<AbortController | null>(null)
@@ -94,6 +96,7 @@ export function App() {
     setExportMsg('')
     setTestResult(null)
     setEvaluation(null)
+    setImproveDelta(null)
     setShowHistory(false)
   }
 
@@ -211,6 +214,15 @@ export function App() {
     const data = await renderSkill(spec)
     setSkillMd(data.skill_md || '')
     setTab('skill_md')
+    // Auto-evaluate after rendering so the user sees the judge score immediately
+    if (cid) {
+      setEvalLoading(true)
+      try {
+        const evalData = await evaluateSkill(cid)
+        setEvaluation(evalData)
+      } catch {}
+      setEvalLoading(false)
+    }
   }
 
   const runTest = async () => {
@@ -232,6 +244,29 @@ export function App() {
       setEvaluation(null)
     }
     setEvalLoading(false)
+  }
+
+  const runImprove = async () => {
+    if (!cid) return
+    setImproveLoading(true)
+    setImproveDelta(null)
+    try {
+      const data = await improveSkill(cid)
+      setSpec(data.spec)
+      setScore(calcScore(data.spec))
+      setImproveDelta({ before: data.score_before, after: data.score_after })
+      // Feed the improvement summary back into the chat so the user sees what changed
+      setMessages(prev => [...prev, { role: 'assistant', content: data.message }])
+      // Re-render the skill md with the improved spec
+      const rendered = await renderSkill(data.spec)
+      setSkillMd(rendered.skill_md || '')
+      // Re-evaluate to reflect new scores
+      if (data.score_after > data.score_before) {
+        const evalData = await evaluateSkill(cid)
+        setEvaluation(evalData)
+      }
+    } catch {}
+    setImproveLoading(false)
   }
 
   const runExport = async () => {
@@ -340,7 +375,21 @@ export function App() {
 
         {/* Progress */}
         <div className="section">
-          <div className="section-title">完成度 {score}%</div>
+          <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>完成度 {score}%</span>
+            {evaluation && (
+              <span style={{
+                fontSize: 11,
+                padding: '2px 7px',
+                borderRadius: 10,
+                background: evaluation.score >= 80 ? 'rgba(76,175,80,0.2)' : evaluation.score >= 60 ? 'rgba(255,193,7,0.2)' : 'rgba(255,82,82,0.2)',
+                color: evaluation.score >= 80 ? '#4caf50' : evaluation.score >= 60 ? '#ffc107' : '#ff5252',
+                fontWeight: 600,
+              }}>
+                Judge {evaluation.score}分
+              </span>
+            )}
+          </div>
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${score}%` }} />
           </div>
@@ -475,10 +524,32 @@ export function App() {
               </div>
             )}
 
-            <div className="section-title" style={{ marginTop: 16 }}>质量评估</div>
-            <button className="btn btn-secondary" onClick={runEvaluate} disabled={evalLoading || !cid} style={{ width: '100%' }}>
-              {evalLoading ? '评估中...' : '🔍 运行质量评估'}
-            </button>
+            <div className="section-title" style={{ marginTop: 16 }}>质量评估（Skill Judge）</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn btn-secondary" onClick={runEvaluate} disabled={evalLoading || !cid} style={{ flex: 1 }}>
+                {evalLoading ? '评估中...' : '🔍 运行评估'}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={runImprove}
+                disabled={improveLoading || !cid}
+                style={{ flex: 1 }}
+                title="根据评估结果自动优化 Skill"
+              >
+                {improveLoading ? '优化中...' : '✨ 自动优化'}
+              </button>
+            </div>
+            {improveDelta && (
+              <div style={{
+                marginTop: 8, padding: '8px 12px', borderRadius: 8,
+                background: improveDelta.after > improveDelta.before ? 'rgba(76,175,80,0.12)' : 'rgba(255,193,7,0.12)',
+                fontSize: 13,
+              }}>
+                {improveDelta.after > improveDelta.before
+                  ? `🚀 优化完成！评分 ${improveDelta.before} → ${improveDelta.after} 分（+${improveDelta.after - improveDelta.before}）`
+                  : `⚠️ 优化后评分 ${improveDelta.after} 分（未提升，建议继续对话补充信息）`}
+              </div>
+            )}
             {evaluation && (
               <div className="test-result" style={{ marginTop: 8 }}>
                 <div className="test-score">综合评分：{evaluation.score} 分</div>

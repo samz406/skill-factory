@@ -360,6 +360,89 @@ SkillSpec:
 }}"""
 
 
+IMPROVE_PROMPT = """你是一个 AI Skill 优化专家。
+
+基于以下质量评估报告，请改进 SkillSpec，使其质量显著提升（目标80分以上）。
+
+当前 SkillSpec：
+{spec}
+
+质量评估报告：
+- 综合评分：{score}
+- 各维度评分：{dimensions}
+- 总体反馈：{feedback}
+- 改进建议：
+{suggestions}
+
+请直接返回改进后的 SkillSpec JSON（只返回 JSON，不要任何前缀或解释）：
+{{
+  "name": "Skill 名称（保留原值）",
+  "description": "业务描述（如不够详细，补充使用场景和触发条件，建议60字以上）",
+  "role": "执行角色描述",
+  "workflow": ["流程步骤1", "流程步骤2", "...（至少3个有序步骤，覆盖完整流程）"],
+  "rules": ["规则1（具体可执行）", "规则2", "...（至少3条）"],
+  "tools": ["工具/API1", "工具/API2"],
+  "constraints": ["约束1", "约束2"],
+  "exceptions": ["异常处理1"],
+  "output_format": "明确的输出格式定义（JSON Schema / Markdown 模板 / 字段说明）"
+}}
+
+改进重点：
+1. description 必须涵盖"是什么"和"什么时候用"两个维度，不能只描述功能
+2. workflow 步骤必须有序、端到端、包含异常处理，步骤内容具体可执行
+3. rules 必须是具体可执行的业务规则，避免模糊表述如"注意安全"
+4. output_format 必须明确输出结构，不能是空的或过于简短
+5. constraints 必须覆盖数据安全、权限控制等风险点"""
+
+
+async def llm_improve_skill(spec: SkillSpec, evaluation: dict) -> SkillSpec | None:
+    """Use LLM to improve skill spec based on evaluation feedback. Returns improved spec or None."""
+    client = _get_client()
+    if not client:
+        return None
+
+    dimensions = evaluation.get("dimensions", {})
+    suggestions_list = evaluation.get("suggestions", [])
+    suggestions_text = "\n".join(f"  - {s}" for s in suggestions_list) if suggestions_list else "  - 参考各维度评分改进"
+
+    prompt = IMPROVE_PROMPT.format(
+        spec=json.dumps(spec.model_dump(), ensure_ascii=False, indent=2),
+        score=evaluation.get("score", 0),
+        dimensions=json.dumps(dimensions, ensure_ascii=False),
+        feedback=evaluation.get("feedback", ""),
+        suggestions=suggestions_text,
+    )
+
+    try:
+        resp = await client.chat.completions.create(
+            model=_get_model(),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        # Merge improved values over the current spec
+        merged = spec.model_dump()
+        for key, val in data.items():
+            if key not in merged:
+                continue
+            if isinstance(val, list) and val:
+                # Replace list if improved version is longer or non-empty
+                if len(val) >= len(merged[key]):
+                    merged[key] = val
+                else:
+                    combined = merged[key] + [v for v in val if v and v not in merged[key]]
+                    merged[key] = combined
+            elif isinstance(val, str) and val:
+                merged[key] = val
+        return SkillSpec(**merged)
+    except Exception as e:
+        logger.warning("LLM improve skill error: %s", e)
+        return None
+
+
 async def llm_evaluate_skill(spec: SkillSpec, skill_md: str) -> dict:
     """Use LLM to evaluate skill quality and return structured evaluation data."""
     client = _get_client()

@@ -16,6 +16,7 @@ from .llm import (
     llm_extract_spec,
     llm_test_skill,
     llm_evaluate_skill,
+    llm_improve_skill,
     maybe_compress,
 )
 from .database import (
@@ -316,6 +317,98 @@ def list_evaluations():
 
 
 # ──────────────────────────────────────────────
+# Skill improvement (judge-driven auto-improvement)
+# ──────────────────────────────────────────────
+
+@app.post("/improve/{conversation_id}")
+async def improve_skill(conversation_id: str):
+    """Auto-improve the skill spec using the latest evaluation feedback.
+
+    If no evaluation is cached, runs one first.  The updated spec is saved
+    back to the draft and both old/new scores are returned so the caller can
+    show the improvement delta.
+    """
+    draft = store.get(conversation_id)
+    if not draft.conversation_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+
+    # Ensure we have evaluation data to guide the improvement
+    evaluation = db_get_evaluation(conversation_id)
+    if not evaluation:
+        # Run a fresh evaluation first
+        skill_md = render_skill_md(draft.spec)
+        basic_score = score_spec(draft.spec)
+        llm_data: dict = {}
+        if is_llm_configured():
+            llm_data = await llm_evaluate_skill(draft.spec, skill_md)
+
+        dimensions: dict = llm_data.get("dimensions", {})
+        if not dimensions:
+            dimensions = {
+                "description_quality": min(100, len(draft.spec.description) * 2) if draft.spec.description else 0,
+                "workflow_completeness": min(100, len(draft.spec.workflow) * 20) if draft.spec.workflow else 0,
+                "rules_specificity": min(100, len(draft.spec.rules) * 25) if draft.spec.rules else 0,
+                "output_clarity": 100 if draft.spec.output_format else 0,
+                "tool_coverage": min(100, len(draft.spec.tools) * 33) if draft.spec.tools else 0,
+                "constraint_rigor": min(100, len(draft.spec.constraints) * 33) if draft.spec.constraints else 0,
+            }
+        evaluation_obj = SkillEvaluation(
+            conversation_id=conversation_id,
+            score=llm_data.get("score", basic_score),
+            dimensions=dimensions,
+            feedback=llm_data.get("feedback", ""),
+            suggestions=llm_data.get("suggestions", []),
+        )
+        evaluation = db_save_evaluation(evaluation_obj)
+
+    score_before = evaluation.score
+    eval_dict = evaluation.model_dump()
+
+    improved_spec: SkillSpec | None = None
+    if is_llm_configured():
+        improved_spec = await llm_improve_skill(draft.spec, eval_dict)
+
+    if not improved_spec:
+        # Rule-based fallback: fill obvious gaps
+        improved_spec = draft.spec.model_copy(deep=True)
+        if not improved_spec.description or len(improved_spec.description) < 50:
+            improved_spec.description = (improved_spec.description or "") + "。适用场景：请补充具体使用场景和触发条件。"
+        if len(improved_spec.workflow) < 3:
+            improved_spec.workflow = improved_spec.workflow + [
+                s for s in ["梳理输入条件并初始化执行上下文", "执行核心业务处理逻辑", "验证输出并记录执行结果"]
+                if s not in improved_spec.workflow
+            ][: max(0, 3 - len(improved_spec.workflow))]
+        if not improved_spec.constraints:
+            improved_spec.constraints = ["敏感信息必须脱敏处理", "高风险操作需二次确认"]
+        if not improved_spec.output_format:
+            improved_spec.output_format = "返回 JSON 对象：{\"status\": \"success|failed\", \"result\": \"处理结果摘要\"}"
+
+    draft.spec = improved_spec
+    store.save(draft)
+
+    score_after = score_spec(improved_spec)
+
+    # Append a summary message to the conversation so the user sees what changed
+    summary_lines = [f"🔧 **Skill 自动优化完成**（评分：{score_before} → {score_after} 分）"]
+    if eval_dict.get("suggestions"):
+        summary_lines.append("\n已根据以下建议进行优化：")
+        for s in eval_dict["suggestions"][:3]:
+            summary_lines.append(f"- {s}")
+    summary_lines.append("\n请检查右侧 SkillSpec 并继续完善，或点击「渲染 SKILL.md」查看最新结果。")
+    draft.messages.append(ChatMessage(role="assistant", content="\n".join(summary_lines)))
+    store.save(draft)
+
+    return {
+        "ok": True,
+        "score_before": score_before,
+        "score_after": score_after,
+        "delta": score_after - score_before,
+        "spec": improved_spec.model_dump(),
+        "message": "\n".join(summary_lines),
+    }
+
+
+# ──────────────────────────────────────────────
 # Conversation history management
 # ──────────────────────────────────────────────
 
@@ -390,8 +483,8 @@ AGENT_TARGETS = {
         "id": "claude_code",
         "label": "Claude Code",
         "icon": "🤖",
-        "description": "Claude Code CLI 自定义命令 (~/.claude/commands/)",
-        "path_template": "~/.claude/commands/{skill_name}.md",
+        "description": "Claude Code Skills 目录 (~/.claude/skills/)",
+        "path_template": "~/.claude/skills/{skill_name}/SKILL.md",
     },
     "cursor": {
         "id": "cursor",
@@ -458,14 +551,13 @@ def sync_skill(conversation_id: str, req: SyncRequest):
 
     if req.custom_path:
         dest_dir = _validate_sync_path(req.custom_path)
+        dest_file = dest_dir / f"{skill_name}.md"
     else:
         path_tpl: str = target["path_template"]  # type: ignore[index]
-        dest = Path(path_tpl.replace("{skill_name}", skill_name)).expanduser()
-        dest_dir = dest.parent
+        dest_file = Path(path_tpl.replace("{skill_name}", skill_name)).expanduser()
+        dest_dir = dest_file.parent
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{skill_name}.md"
-    dest_file = dest_dir / filename
     dest_file.write_text(content, encoding="utf-8")
 
     return {
