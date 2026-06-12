@@ -220,7 +220,9 @@ export function App() {
       try {
         const evalData = await evaluateSkill(cid)
         setEvaluation(evalData)
-      } catch {}
+      } catch {
+        // Auto-evaluation is best-effort; silently skip if LLM is not configured
+      }
       setEvalLoading(false)
     }
   }
@@ -240,7 +242,8 @@ export function App() {
     try {
       const data = await evaluateSkill(cid)
       setEvaluation(data)
-    } catch {
+    } catch (err) {
+      setExportMsg('❌ 评估失败，请确认 LLM 已配置')
       setEvaluation(null)
     }
     setEvalLoading(false)
@@ -262,10 +265,16 @@ export function App() {
       setSkillMd(rendered.skill_md || '')
       // Re-evaluate to reflect new scores
       if (data.score_after > data.score_before) {
-        const evalData = await evaluateSkill(cid)
-        setEvaluation(evalData)
+        try {
+          const evalData = await evaluateSkill(cid)
+          setEvaluation(evalData)
+        } catch {
+          // Re-evaluation is best-effort
+        }
       }
-    } catch {}
+    } catch {
+      setExportMsg('❌ 自动优化失败，请确认 LLM 已配置或稍后重试')
+    }
     setImproveLoading(false)
   }
 

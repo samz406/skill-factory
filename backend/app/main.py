@@ -370,14 +370,21 @@ async def improve_skill(conversation_id: str):
 
     if not improved_spec:
         # Rule-based fallback: fill obvious gaps
+        MIN_DESCRIPTION_LENGTH = 50
+        MIN_WORKFLOW_STEPS = 3
+        DEFAULT_WORKFLOW_STEPS = [
+            "梳理输入条件并初始化执行上下文",
+            "执行核心业务处理逻辑",
+            "验证输出并记录执行结果",
+        ]
         improved_spec = draft.spec.model_copy(deep=True)
-        if not improved_spec.description or len(improved_spec.description) < 50:
+        if not improved_spec.description or len(improved_spec.description) < MIN_DESCRIPTION_LENGTH:
             improved_spec.description = (improved_spec.description or "") + "。适用场景：请补充具体使用场景和触发条件。"
-        if len(improved_spec.workflow) < 3:
-            improved_spec.workflow = improved_spec.workflow + [
-                s for s in ["梳理输入条件并初始化执行上下文", "执行核心业务处理逻辑", "验证输出并记录执行结果"]
-                if s not in improved_spec.workflow
-            ][: max(0, 3 - len(improved_spec.workflow))]
+        if len(improved_spec.workflow) < MIN_WORKFLOW_STEPS:
+            existing_steps = set(improved_spec.workflow)
+            extra = [s for s in DEFAULT_WORKFLOW_STEPS if s not in existing_steps]
+            needed = MIN_WORKFLOW_STEPS - len(improved_spec.workflow)
+            improved_spec.workflow = improved_spec.workflow + extra[:needed]
         if not improved_spec.constraints:
             improved_spec.constraints = ["敏感信息必须脱敏处理", "高风险操作需二次确认"]
         if not improved_spec.output_format:

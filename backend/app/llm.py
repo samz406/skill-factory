@@ -423,18 +423,19 @@ async def llm_improve_skill(spec: SkillSpec, evaluation: dict) -> SkillSpec | No
         )
         raw = resp.choices[0].message.content or "{}"
         data = json.loads(raw)
-        # Merge improved values over the current spec
+        # Merge improved values over the current spec.
+        # For list fields: keep all existing items and append any new items from the
+        # LLM that are not already present (O(1) set lookup to avoid duplicates).
+        # This ensures domain-specific steps/rules authored by the user are never lost.
         merged = spec.model_dump()
         for key, val in data.items():
             if key not in merged:
                 continue
             if isinstance(val, list) and val:
-                # Replace list if improved version is longer or non-empty
-                if len(val) >= len(merged[key]):
-                    merged[key] = val
-                else:
-                    combined = merged[key] + [v for v in val if v and v not in merged[key]]
-                    merged[key] = combined
+                existing = merged[key]
+                existing_set = set(existing)
+                new_items = [v for v in val if v and v not in existing_set]
+                merged[key] = existing + new_items
             elif isinstance(val, str) and val:
                 merged[key] = val
         return SkillSpec(**merged)
